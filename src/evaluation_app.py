@@ -229,27 +229,6 @@ def display_session_results(result_data: dict):
     else:
         st.error("Değerlendirme metrikleri alınamadı.")
 
-async def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
-    """Tüm bir oturumu değerlendirir."""
-    try:
-        full_conversation = []
-        for _, row in session_df.sort_values('created_at').iterrows():
-            full_conversation.append({"role": str(row['type']).lower(), "content": str(row['content'])})
-        
-        agent_persona = session_df['persona'].iloc[0]
-        try:
-            tasks_str = str(session_df['tasks'].iloc[0])
-            tasks = json.loads(tasks_str.replace("'", "\""))
-            task_descriptions = [t.get('value', {}).get('about', '') for t in tasks if t.get('type') == 'talk-about']
-            agent_goal = ". ".join(filter(None, task_descriptions)) or "Kullanıcıya yardımcı olmak."
-        except (json.JSONDecodeError, TypeError):
-            agent_goal = "Kullanıcıya yardımcı olmak."
-
-        return await _evaluator.evaluate_session(full_conversation, agent_goal, str(agent_persona))
-    except Exception as e:
-        st.error(f"Oturum değerlendirme hatası: {e}")
-        return None
-
 # --- NAVİGASYON ---
 with st.sidebar:
     # Projeyi taşınabilir hale getirmek için yerel ve göreceli bir yol kullanın.
