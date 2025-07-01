@@ -17,7 +17,7 @@ from src.celery_app import celery_app
 from src.vector_db.embedding_service import AgentEmbeddingService
 from src.rag.rag_pipeline import RAGPipeline
 from src.evaluation.evaluator import AgentEvaluator, EvaluationMetrics
-from src.tasks import batch_evaluate_task
+from src.tasks import batch_evaluate_task, evaluate_and_summarize_session_task
 
 # --- Sayfa Yapılandırması ---
 st.set_page_config(
@@ -74,18 +74,18 @@ def process_chat_data(chats_df: pd.DataFrame, personas_df: pd.DataFrame, tasks_d
     merged_df = pd.merge(chats_df, personas_df, on='agent_id', how='left')
     merged_df = pd.merge(merged_df, tasks_df, on='agent_id', how='left')
     
-    user_chats = merged_df[merged_df['type'] == 'USER'].rename(columns={'content': 'user_query', 'created_at': 'user_time'})
-    assistant_chats = merged_df[merged_df['type'] == 'ASSISTANT'].rename(columns={'content': 'agent_response', 'created_at': 'assistant_time'})
+    user_chats = merged_df[merged_df['type'] == 'USER'].rename({'content': 'user_query', 'created_at': 'user_time'}, axis='columns')
+    assistant_chats = merged_df[merged_df['type'] == 'ASSISTANT'].rename({'content': 'agent_response', 'created_at': 'assistant_time'}, axis='columns')
     
     user_chats['chat_rank'] = user_chats.groupby('chat_id').cumcount()
     assistant_chats['chat_rank'] = assistant_chats.groupby('chat_id').cumcount()
     
-    qa_df = pd.merge(
-        user_chats[user_chats['chat_rank'] == 0], 
-        assistant_chats[assistant_chats['chat_rank'] > 0],
+    qa_df = pd.DataFrame(pd.merge(
+        user_chats[user_chats['chat_rank'] == 0], # type: ignore
+        assistant_chats[assistant_chats['chat_rank'] > 0], # type: ignore
         on=['chat_id', 'agent_id'],
         suffixes=('_user', '_assistant')
-    )
+    ))
     
     # HATA DÜZELTMESİ: Birleştirme sonrası _user ve _assistant olarak ayrılan sütunları düzelt
     if 'persona_user' in qa_df.columns:
@@ -131,7 +131,7 @@ def load_and_merge_raw_data(data_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # --- Değerlendirme Fonksiyonu ---
-def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
+async def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
     """Tek bir konuşma verisi için değerlendirmeyi çalıştırır."""
     try:
         user_query = str(eval_data['user_query'])
@@ -148,7 +148,7 @@ def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional
         
         rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{agent_response}'"
 
-        return _evaluator.evaluate_conversation(
+        return await _evaluator.evaluate_conversation(
             user_query=user_query, agent_response=agent_response,
             agent_goal=agent_goal, rag_context=rag_context,
             agent_persona=agent_persona, tool_calls=None
@@ -209,6 +209,26 @@ def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
     else:
         st.success("Bu değerlendirme için geri bildiriminiz alınmıştır. Teşekkürler!")
 
+def display_session_results(result_data: dict):
+    """Oturum değerlendirme ve özet sonuçlarını görselleştirir."""
+    if not result_data:
+        st.error("Değerlendirme sonucu alınamadı.")
+        return
+
+    summary = result_data.get("summary")
+    evaluation_result_data = result_data.get("evaluation")
+
+    if summary:
+        st.subheader("Oturum Özeti")
+        st.markdown(summary)
+    
+    if evaluation_result_data:
+        # Pydantic modelini yeniden oluşturarak eski fonksiyonu kullanabiliriz
+        evaluation_metrics = EvaluationMetrics.model_validate(evaluation_result_data)
+        display_evaluation_results(evaluation_metrics)
+    else:
+        st.error("Değerlendirme metrikleri alınamadı.")
+
 async def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
     """Tüm bir oturumu değerlendirir."""
     try:
@@ -234,7 +254,7 @@ async def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEval
 with st.sidebar:
     # Projeyi taşınabilir hale getirmek için yerel ve göreceli bir yol kullanın.
     # 'use_column_width' genellikle daha iyi kalite için genişliği optimize eder.
-    st.image("src/assets/Jotform-New-Logo.png", use_container_width='auto')
+    st.image("src/assets/Jotform-New-Logo.png", use_container_width=True) # type: ignore
     st.title("AI Agent Değerlendirme")
     
     page = option_menu(
@@ -405,10 +425,10 @@ elif page == "Oturum Analizi":
     if not session_raw_data.empty:
         chat_ids = session_raw_data['chat_id'].unique()
         
-        # Kullanıcı yeni bir oturum seçtiğinde eski sonuçları temizlemek için bir callback
+        # Kullanıcı yeni bir oturum seçtiğinde eski sonuçları ve task'ı temizle
         def on_chat_id_change():
-            if 'session_eval_result' in st.session_state:
-                del st.session_state['session_eval_result']
+            if 'session_task_id' in st.session_state:
+                del st.session_state['session_task_id']
 
         selected_chat_id = st.selectbox(
             "Değerlendirilecek Oturumu Seçin (Chat ID):", 
@@ -418,33 +438,62 @@ elif page == "Oturum Analizi":
         )
 
         if selected_chat_id:
-            session_df = session_raw_data[session_raw_data['chat_id'] == selected_chat_id].copy()
+            session_df = session_raw_data[session_raw_data['chat_id'] == selected_chat_id].copy() # type: ignore
             
             st.subheader(f"Oturum Dökümü: `{selected_chat_id}`")
             with st.container(height=400):
-                for _, row in session_df.sort_values('created_at').iterrows():
+                for _, row in session_df.sort_values(by='created_at').iterrows(): # type: ignore
                     user_type = str(row.get('type', 'assistant')).upper()
                     with st.chat_message(name="user" if user_type == 'USER' else "assistant"):
                         st.markdown(str(row.get('content', '')))
             
             with st.expander("Agent Görev ve Persona Detayları"):
                 if not session_df.empty and 'persona' in session_df.columns:
-                    st.code(str(session_df['persona'].iloc[0]), language=None)
+                    st.code(str(session_df['persona'].iloc[0]), language=None) # type: ignore
 
-            if st.button("🚀 Bu Oturumu Değerlendir", key="eval_session", use_container_width=True, type="primary"):
-                if evaluator and not session_df.empty:
-                    with st.spinner("Oturum değerlendiriliyor..."):
-                        result = asyncio.run(run_session_evaluation(session_df, evaluator))
-                        # Değerlendirme sonucunu session_state'e kaydet
-                        st.session_state['session_eval_result'] = result
-                elif session_df.empty:
-                    st.warning("Değerlendirilecek oturum verisi bulunamadı.")
+            if st.button("🚀 Bu Oturumu Arka Planda Değerlendir", key="eval_session_async", use_container_width=True, type="primary"):
+                if not session_df.empty:
+                    session_data_json = session_df.to_json(orient='split')
+                    task = evaluate_and_summarize_session_task.delay(session_data_json)
+                    st.session_state['session_task_id'] = task.id
+                    st.success(f"Oturum değerlendirme görevi başlatıldı! Görev ID: {task.id}")
+                    st.info("İlerleme durumu aşağıda gösterilecektir. Bu sırada başka sayfalara gidebilirsiniz.")
                 else:
-                    st.error("Değerlendirici servisi (Evaluator) başlatılamadı.")
+                    st.warning("Değerlendirilecek oturum verisi bulunamadı.")
 
-            # Eğer session_state'de bir sonuç varsa, onu göster
-            if 'session_eval_result' in st.session_state:
-                display_evaluation_results(st.session_state['session_eval_result'])
+            # --- Görev Durumunu Kontrol Etme ve Sonuçları Gösterme ---
+            if 'session_task_id' in st.session_state:
+                task_id = st.session_state['session_task_id']
+                task_result = AsyncResult(task_id, app=celery_app)
+
+                st.markdown("---")
+                
+                if task_result.ready():
+                    if task_result.successful():
+                        st.success(f"Oturum değerlendirme görevi (ID: {task_id}) başarıyla tamamlandı!")
+                        result_data = task_result.get()
+                        
+                        if result_data:
+                            if result_data.get("error"):
+                                st.error(f"Değerlendirme hatası: {result_data.get('error')}")
+                            else:
+                                display_session_results(result_data)
+                        else:
+                            st.error("Görevden bir sonuç alınamadı.")
+
+                        # Sonucu gösterdikten sonra task id'yi temizle
+                        del st.session_state['session_task_id']
+                    else:
+                        st.error(f"Görev (ID: {task_id}) bir hatayla sonuçlandı: {task_result.info}")
+                        del st.session_state['session_task_id']
+                else:
+                    # Görev hala çalışıyor, ilerlemeyi göster
+                    progress_meta = task_result.info or {}
+                    status = progress_meta.get('status', 'Başlatılıyor...')
+                    st.info(f"Görev durumu: {status}")
+                    with st.spinner("Sonuçlar bekleniyor... Sayfa 5 saniye içinde yenilenecektir."):
+                        time.sleep(5)
+                        st.rerun()
                 
     else:
         st.error("Varsayılan veri yüklenemedi.") 

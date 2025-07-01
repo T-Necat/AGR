@@ -42,4 +42,4 @@ def get_settings() -> Settings:
     Ayarları önbelleğe alarak döndüren fonksiyon.
     Bu, test sırasında ayarların üzerine yazılabilmesini sağlar.
     """
-    return Settings() 
+    return Settings.model_validate({}) 

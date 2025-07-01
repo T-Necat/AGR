@@ -1,6 +1,6 @@
 import logging
 import sys
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 def setup_logging():
     """
@@ -19,7 +19,7 @@ def setup_logging():
     log_handler = logging.StreamHandler(sys.stdout)
     
     # JSON formatlayıcı oluştur
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         '%(asctime)s %(name)s %(levelname)s %(message)s %(lineno)d %(filename)s'
     )
     
@@ -36,6 +36,6 @@ if __name__ == '__main__':
     logging.info("Bu bir test log mesajıdır.", extra={'test_key': 'test_value'})
     logging.warning("Bu bir uyarı mesajıdır.")
     try:
-        1 / 0
+        raise ZeroDivisionError("Hata yakalama testi")
     except ZeroDivisionError:
         logging.error("Bir hata oluştu", exc_info=True) 

@@ -188,6 +188,42 @@ class AgentEvaluator:
             logger.error(f"Oturum değerlendirme sırasında bir hata oluştu: {e}", exc_info=True)
             return None
 
+    async def summarize_session(self, full_conversation: List[Dict[str, str]]) -> str:
+        """
+        Tüm bir konuşma oturumunu asenkron olarak özetler.
+        """
+        conversation_str = "\\n".join([f"- {msg['role']}: {msg['content']}" for msg in full_conversation])
+        logger.info(f"Oturum özeti oluşturma başlatıldı. Oturumda {len(full_conversation)} mesaj var.")
+
+        prompt = f"""
+        Bir AI analisti olarak, aşağıdaki konuşma dökümünü dikkatlice oku.
+        Görevin, bu konuşmayı 2-3 cümlelik, kısa ve öz bir şekilde özetlemektir.
+        Özetin şunları yansıtması gerekir:
+        1.  Kullanıcının ana sorunu veya amacı neydi?
+        2.  Agent nasıl bir çözüm veya yanıt sundu?
+        3.  Konuşma nasıl sonuçlandı (çözüldü, çözülemedi, kullanıcıya ek bilgi verildi vb.)?
+
+        --- ÖZETLENECEK KONUŞMA GEÇMİŞİ ---
+        {conversation_str}
+
+        --- ÇIKTI (SADECE ÖZET METNİ) ---
+        """
+        try:
+            response = await self.async_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that summarizes conversations concisely."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+            )
+            summary = response.choices[0].message.content or "Özet oluşturulamadı."
+            logger.info("Oturum özeti başarıyla oluşturuldu.")
+            return summary.strip()
+        except Exception as e:
+            logger.error(f"Oturum özeti oluşturulurken bir hata oluştu: {e}", exc_info=True)
+            return "Özet oluşturulurken bir hata meydana geldi."
+
 async def main_async():
     # Örnek veriler
     test_user_query = "Köpeğim için en iyi mama hangisi ve fiyatları nedir?"
