@@ -470,8 +470,8 @@ elif page == "Oturum Analizi":
                     progress_meta = task_result.info or {}
                     status = progress_meta.get('status', 'Başlatılıyor...')
                     st.info(f"Görev durumu: {status}")
-                    with st.spinner("Sonuçlar bekleniyor... Sayfa 5 saniye içinde yenilenecektir."):
-                        time.sleep(5)
+                    with st.spinner("Sonuçlar bekleniyor... Sayfa 3 saniye içinde yenilenecektir."):
+                        time.sleep(3)
                         st.rerun()
                 
     else:
