@@ -1,42 +1,37 @@
-import os
 import logging
 import pandas as pd
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Optional
-from dotenv import load_dotenv
-from openai import OpenAI, BadRequestError
+from openai import AsyncOpenAI, OpenAI, BadRequestError
 import tiktoken
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Çevre değişkenlerini yükle ve Logging ayarları
-load_dotenv()
+from src.config import get_settings
+
+# Logging ayarları
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AgentEmbeddingService:
     """OpenAI API'si kullanarak vektör oluşturan ve yöneten servis"""
 
-    def __init__(self,
-                 persist_directory: str = "./chroma_db_openai",
-                 embedding_model_name: str = "text-embedding-3-small",
-                 collection_name: str = "agents_openai"):
-
-        self.persist_directory = persist_directory
-        self.embedding_model_name = embedding_model_name
+    def __init__(self, collection_name: str = "agents_openai"):
+        settings = get_settings()
+        self.persist_directory = settings.CHROMA_PERSIST_DIRECTORY
+        self.embedding_model_name = settings.EMBEDDING_MODEL
         self.collection_name = collection_name
 
-        # OpenAI istemcisini başlat
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY çevre değişkeni ayarlanmalıdır.")
-        self.openai_client = OpenAI(api_key=api_key)
+        # Asenkron OpenAI istemcisini başlat
+        self.async_openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        # Bazı operasyonlar (eski batch recursive gibi) senkron kalabilir, bu yüzden senkronu da tutalım
+        self.sync_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
         logger.info(f"OpenAI embedding modeli kullanılacak: {self.embedding_model_name}")
 
-        self.client = chromadb.PersistentClient(path=persist_directory, settings=Settings(anonymized_telemetry=False, allow_reset=True))
+        self.client = chromadb.PersistentClient(path=self.persist_directory, settings=Settings(anonymized_telemetry=False, allow_reset=True))
         self.collection = self._get_or_create_collection()
-        logger.info(f"Embedding servisi başlatıldı: {persist_directory}")
+        logger.info(f"Embedding servisi başlatıldı: {self.persist_directory}")
 
     def _reset_collection(self):
         """Mevcut koleksiyonu siler ve yeniden oluşturur."""
@@ -52,25 +47,25 @@ class AgentEmbeddingService:
             metadata={"hnsw:space": "cosine"}
         )
 
-    def create_openai_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Verilen metin listesi için OpenAI embedding'leri oluşturur."""
+    async def create_openai_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Verilen metin listesi için OpenAI embedding'leri asenkron olarak oluşturur."""
         if not texts:
             return []
         
-        response = self.openai_client.embeddings.create(
+        response = await self.async_openai_client.embeddings.create(
             input=texts,
             model=self.embedding_model_name
         )
         return [embedding.embedding for embedding in response.data]
 
-    def search_similar_agents(self,
+    async def search_similar_agents(self,
                             query: str,
-                            top_k: int = 5,
-                            score_threshold: float = 0.5) -> List[Dict]:
-        """Sorguya benzer agent'ları arar."""
+                            top_k: int,
+                            score_threshold: float) -> List[Dict]:
+        """Sorguya benzer agent'ları asenkron olarak arar."""
         try:
-            logger.info(f"OpenAI ile arama yapılıyor: query='{query}', top_k={top_k}, score_threshold={score_threshold}")
-            query_embedding = self.create_openai_embeddings([query])[0]
+            logger.info(f"OpenAI ile asenkron arama yapılıyor: query='{query}', top_k={top_k}, score_threshold={score_threshold}")
+            query_embedding = (await self.create_openai_embeddings([query]))[0]
 
             results = self.collection.query(
                 query_embeddings=[query_embedding],
@@ -103,7 +98,7 @@ class AgentEmbeddingService:
             logger.error(f"Agent arama sırasında hata: {e}", exc_info=True)
             return []
 
-    def create_and_store_embeddings_from_df(self, df: pd.DataFrame) -> bool:
+    async def create_and_store_embeddings_from_df(self, df: pd.DataFrame) -> bool:
         """
         DataFrame'den embedding'ler oluşturur ve bunları ChromaDB'de saklar.
         Bu işlem, mevcut koleksiyonu temizler ve verileri yeniden doldurur.
@@ -168,7 +163,7 @@ class AgentEmbeddingService:
             for i, (batch_docs, batch_metadatas, batch_ids) in enumerate(batches):
                 logger.info(f"Batch {i + 1}/{len(batches)} işleniyor...")
                 try:
-                    embeddings = self.create_openai_embeddings(batch_docs)
+                    embeddings = await self.create_openai_embeddings(batch_docs)
                     if embeddings:
                         self.collection.add(
                             embeddings=embeddings,      # type: ignore
@@ -188,6 +183,10 @@ class AgentEmbeddingService:
         except Exception as e:
             logger.error(f"Embedding oluşturma ve depolama sırasında kritik hata: {e}", exc_info=True)
             return False
+
+    def get_sync_client(self) -> OpenAI:
+        """Senkron OpenAI istemcisini döndürür."""
+        return self.sync_openai_client
 
     def load_knowledge_base(self, csv_file: str = "agent_knowledge_base.csv") -> pd.DataFrame:
         """Knowledge base CSV dosyasını yükler"""
@@ -256,8 +255,9 @@ class AgentEmbeddingService:
                 'collection_name': self.collection_name
             }
 
-if __name__ == "__main__":
+async def main_async():
     # Test için
+    # collection_name parametresi opsiyoneldir, isterseniz değiştirebilirsiniz.
     service = AgentEmbeddingService()
     
     # Knowledge base'i yükle
@@ -270,5 +270,10 @@ if __name__ == "__main__":
         
         # Test araması
         test_query = "customer service help"
-        results = service.search_similar_agents(test_query)
-        print(f"Test araması sonuçları: {len(results)} agent bulundu") 
+        # rag_pipeline'dan gelen değerler kullanılacağı için burada manuel olarak sağlıyoruz.
+        results = await service.search_similar_agents(test_query, top_k=5, score_threshold=0.7)
+        print(f"Test araması sonuçları: {len(results)} agent bulundu")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main_async()) 

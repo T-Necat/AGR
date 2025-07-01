@@ -1,16 +1,14 @@
 from celery import Celery
-import os
+from src.config import get_settings
 
-# Redis'in çalıştığı adresi tanımla.
-# Varsayılan olarak localhost:6379 kullanılır.
-REDIS_URL = "redis://localhost:6379/0"
+settings = get_settings()
 
 # Celery uygulamasını oluştur.
 celery_app = Celery(
-    'tasks',                      # Uygulamanın adı
-    broker=REDIS_URL,             # Görevleri göndereceğimiz yer (Mesajlaşma Aracısı)
-    backend=REDIS_URL,            # Görev sonuçlarını saklayacağımız yer (Sonuç Deposu)
-    include=['src.tasks']         # Worker başladığında yüklenecek görev modülleri
+    'tasks',                                # Uygulamanın adı
+    broker=settings.CELERY_BROKER_URL,      # Görevleri göndereceğimiz yer (Mesajlaşma Aracısı)
+    backend=settings.CELERY_RESULT_BACKEND, # Görev sonuçlarını saklayacağımız yer (Sonuç Deposu)
+    include=['src.tasks']                   # Worker başladığında yüklenecek görev modülleri
 )
 
 # İsteğe bağlı Celery yapılandırması

@@ -1,14 +1,11 @@
-import os
 import logging
 from typing import Dict, List, Optional
 
 import instructor
-from openai import OpenAI
-from dotenv import load_dotenv
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-# Çevre değişkenlerini yükle
-load_dotenv()
+from src.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,30 +37,28 @@ class RAGPipeline:
     2. Yanıtı üretir (Generate)
     """
 
-    def __init__(self,
-                 embedding_service,
-                 llm_model: str = "o4-mini-2025-04-16",
-                 temperature: float = 0.1):
-
+    def __init__(self, embedding_service):
+        settings = get_settings()
         self.embedding_service = embedding_service
-        self.llm_model = llm_model
-        self.temperature = temperature
+        self.llm_model = settings.LLM_MODEL
+        self.temperature = settings.TEMPERATURE
 
-        # OpenAI istemcisini `instructor` ile yapılandır
-        self.client = instructor.patch(OpenAI(api_key=os.getenv("OPENAI_API_KEY")))
+        # Asenkron OpenAI istemcisini `instructor` ile yapılandır
+        self.async_client = instructor.patch(AsyncOpenAI(api_key=settings.OPENAI_API_KEY))
 
         logger.info(f"RAG Pipeline başlatıldı: LLM={self.llm_model}")
 
-    def _get_relevant_context(self, query: str, top_k: int = 5, score_threshold: float = 0.5) -> str:
+    async def _get_relevant_context(self, query: str) -> str:
         """
-        Verilen sorgu için vektör veritabanından ilgili bağlamı arar.
+        Verilen sorgu için vektör veritabanından ilgili bağlamı asenkron olarak arar.
         """
+        settings = get_settings()
         logger.info(f"'{query}' sorgusu için ilgili bağlam aranıyor...")
         try:
-            similar_chunks = self.embedding_service.search_similar_agents(
+            similar_chunks = await self.embedding_service.search_similar_agents(
                 query=query,
-                top_k=top_k,
-                score_threshold=score_threshold
+                top_k=settings.TOP_K_RESULTS,
+                score_threshold=settings.SIMILARITY_THRESHOLD
             )
             logger.info(f"Vektör veritabanından {len(similar_chunks)} adet chunk bulundu.")
 
@@ -78,12 +73,12 @@ class RAGPipeline:
             logger.error(f"Bağlam alınırken hata oluştu: {e}", exc_info=True)
             return "Hata: Bilgi tabanına erişilemedi."
 
-    def execute_pipeline(self,
+    async def execute_pipeline(self,
                          user_query: str,
                          agent_goal: str,
                          agent_persona: str) -> Dict:
         """
-        RAG pipeline'ını uçtan uca çalıştırır.
+        RAG pipeline'ını uçtan uca asenkron olarak çalıştırır.
         
         Args:
             user_query (str): Kullanıcının orijinal sorgusu.
@@ -98,7 +93,7 @@ class RAGPipeline:
         """
         try:
             # 1. Adım: Bağlamı Al (Retrieve)
-            rag_context = self._get_relevant_context(user_query)
+            rag_context = await self._get_relevant_context(user_query)
 
             # 2. Adım: Yanıtı Üret (Generate)
             prompt = f"""
@@ -118,7 +113,7 @@ class RAGPipeline:
             """
 
             # `instructor` kullanarak yapılandırılmış yanıt al
-            generated_output = self.client.chat.completions.create(  # type: ignore
+            generated_output = await self.async_client.chat.completions.create(  # type: ignore
                 model=self.llm_model,
                 response_model=GeneratedResponse,
                 messages=[
@@ -144,12 +139,11 @@ class RAGPipeline:
                 "tool_calls": None
             }
 
-# Örnek kullanım (test için)
-if __name__ == "__main__":
+async def main_async():
     # Gerçek bir embedding_service mock'u veya örneği gerekir.
     # Bu basit test için sahte bir servis oluşturalım.
     class MockEmbeddingService:
-        def search_similar_agents(self, query: str, top_k: int, score_threshold: float) -> List[Dict]:
+        async def search_similar_agents(self, query: str, top_k: int, score_threshold: float) -> List[Dict]:
             print(f"Mock arama yapılıyor: '{query}'")
             if "fatura" in query:
                 return [
@@ -165,7 +159,7 @@ if __name__ == "__main__":
     test_goal = "Kullanıcıların fatura sorunlarını çözmelerine yardımcı olmak."
     test_persona = "Sakin, profesyonel ve çözüm odaklı bir müşteri temsilcisi."
 
-    result = rag_pipeline.execute_pipeline(
+    result = await rag_pipeline.execute_pipeline(
         user_query=test_query,
         agent_goal=test_goal,
         agent_persona=test_persona
@@ -173,4 +167,9 @@ if __name__ == "__main__":
 
     print("\n--- RAG Pipeline Çıktısı ---")
     import json
-    print(json.dumps(result, indent=2, ensure_ascii=False)) 
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+# Örnek kullanım (test için)
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main_async()) 

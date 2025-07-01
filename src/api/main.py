@@ -1,24 +1,32 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 import logging
-import os
-from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi.responses import JSONResponse
+import uuid
+from prometheus_fastapi_instrumentator import Instrumentator
 
-# Çevre değişkenlerini yükle
-load_dotenv()
+from src.config import get_settings
+from src.vector_db.embedding_service import AgentEmbeddingService
+from src.rag.rag_pipeline import RAGPipeline
+from src.evaluation.evaluator import AgentEvaluator, EvaluationMetrics
+from src.logging_config import setup_logging
 
-# Modülleri import et
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Logger'ı yapılandır
+setup_logging()
 
-from vector_db.embedding_service import AgentEmbeddingService
-from rag.rag_pipeline import RAGPipeline, GeneratedResponse
-from evaluation.evaluator import AgentEvaluator, EvaluationMetrics
+# Rate Limiting
+limiter = Limiter(key_func=get_remote_address)
+
+# API Anahtarı için Header tanımı
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # Logging ayarları
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # FastAPI uygulamasını başlat
@@ -27,6 +35,32 @@ app = FastAPI(
     description="Provides a chat interface for an AI agent and evaluates its responses in real-time.",
     version="2.0.0"
 )
+
+# Prometheus Instrumentator'ü ekle
+Instrumentator().instrument(app).expose(app)
+
+@app.middleware("http")
+async def central_error_handling_middleware(request: Request, call_next):
+    """
+    Tüm beklenmedik hataları yakalayan ve standart bir formatta yanıtlayan
+    merkezi bir middleware.
+    """
+    try:
+        return await call_next(request)
+    except Exception as e:
+        error_id = uuid.uuid4()
+        logger.error(f"Beklenmedik hata oluştu: error_id={error_id}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Sunucuda beklenmedik bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+                "error_id": str(error_id)
+            }
+        )
+
+# Rate Limiting Middleware'i ekle
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS ayarları
 app.add_middleware(
@@ -37,16 +71,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Güvenlik ---
+
+async def get_api_key(api_key: str = Security(api_key_header)):
+    """API anahtarını doğrular."""
+    settings = get_settings()
+    if not settings.API_KEY:
+        raise HTTPException(status_code=500, detail="Sunucu tarafında API anahtarı yapılandırılmamış.")
+    
+    if api_key == settings.API_KEY:
+        return api_key
+    else:
+        raise HTTPException(status_code=403, detail="Geçersiz veya eksik API anahtarı.")
+
 # --- Pydantic Modelleri ---
 
 class ChatRequest(BaseModel):
-    query: str
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=5000,
+        description="Kullanıcının sormak istediği soru."
+    )
     agent_goal: str = Field(
         "Kullanıcının sorusunu, sağlanan bilgi tabanına dayanarak doğru ve eksiksiz bir şekilde yanıtlamak.",
+        min_length=10,
+        max_length=500,
         description="Agent'ın bu etkileşimdeki ana hedefi."
     )
     agent_persona: str = Field(
         "Yardımsever, profesyonel ve net bir yapay zeka asistanı.",
+        min_length=10,
+        max_length=500,
         description="Agent'ın benimsemesi gereken kişilik."
     )
 
@@ -72,12 +128,10 @@ def startup_event():
     """Uygulama başladığında servisleri başlatır"""
     global embedding_service, rag_pipeline, evaluator
     try:
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(project_root, "chroma_db_openai")
-        
-        logger.info(f"Veritabanı yolu: {db_path}")
+        settings = get_settings()
+        logger.info(f"Veritabanı yolu: {settings.CHROMA_PERSIST_DIRECTORY}")
 
-        embedding_service = AgentEmbeddingService(persist_directory=db_path)
+        embedding_service = AgentEmbeddingService()
         rag_pipeline = RAGPipeline(embedding_service=embedding_service)
         evaluator = AgentEvaluator()
         
@@ -93,7 +147,8 @@ def startup_event():
 # --- API Endpoints ---
 
 @app.get("/", response_model=Dict)
-async def root():
+@limiter.limit("20/minute")
+async def root(request: Request):
     """Ana endpoint"""
     return {
         "message": "AI Agent Evaluation API",
@@ -103,7 +158,8 @@ async def root():
     }
 
 @app.get("/health", response_model=SystemStatusResponse)
-async def health_check():
+@limiter.limit("20/minute")
+async def health_check(request: Request):
     """Sistem ve servislerin sağlık durumunu kontrol eder."""
     active_services = []
     if embedding_service: active_services.append("EmbeddingService")
@@ -127,29 +183,34 @@ async def health_check():
     )
 
 @app.post("/chat_and_evaluate", response_model=ChatResponse)
-async def chat_and_evaluate(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat_and_evaluate(request: ChatRequest, api_key: str = Security(get_api_key)):
     """
     Kullanıcı sorgusunu işler, bir yanıt üretir ve bu yanıtı anında değerlendirir.
+    Bu endpoint API anahtarı ile korunmaktadır.
     """
     if not all([rag_pipeline, evaluator]):
         raise HTTPException(status_code=503, detail="Bir veya daha fazla servis kullanılamıyor. Lütfen logları kontrol edin.")
     
     try:
         # 1. RAG pipeline'ı çalıştırarak yanıt üret
-        pipeline_output = rag_pipeline.execute_pipeline(
+        pipeline_output = await rag_pipeline.execute_pipeline(
             user_query=request.query,
             agent_goal=request.agent_goal,
             agent_persona=request.agent_persona
         )
 
         # 2. Üretilen yanıtı değerlendir
-        evaluation_result = evaluator.evaluate_conversation(
+        # RAG pipeline'ından gelen tool_calls'u doğrudan kullan
+        tool_calls_data = pipeline_output.get("tool_calls")
+
+        evaluation_result = await evaluator.evaluate_conversation(
             user_query=request.query,
             agent_response=pipeline_output["agent_response"],
             agent_goal=request.agent_goal,
             rag_context=pipeline_output["rag_context"],
             agent_persona=request.agent_persona,
-            tool_calls=pipeline_output["tool_calls"]
+            tool_calls=tool_calls_data
         )
 
         if not evaluation_result:

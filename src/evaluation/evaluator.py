@@ -1,29 +1,14 @@
-import os
-import openai
 import logging
+import asyncio
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 import instructor
-from dotenv import load_dotenv
+import openai
 
-load_dotenv()
+from src.config import get_settings
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# OpenAI istemcisini `instructor` ile genişlet
-# Bu, Pydantic modellerini kullanarak yapılandırılmış çıktılar almamızı sağlar
-try:
-    client = instructor.patch(openai.OpenAI())
-    # Test amaçlı basit bir istek atarak API anahtarının geçerliliğini kontrol et
-    client.models.list()
-    logger.info("OpenAI istemcisi başarıyla başlatıldı ve API anahtarı doğrulandı.")
-except openai.AuthenticationError as e:
-    logger.error("OpenAI API anahtarı geçersiz veya ayarlanmamış. Lütfen .env dosyasını kontrol edin.", exc_info=True)
-    # Anahtar yoksa veya yanlışsa programın devam etmesini engellemek için hata fırlat
-    raise e
-except Exception as e:
-    logger.error(f"OpenAI istemcisi başlatılırken beklenmedik bir hata oluştu: {e}", exc_info=True)
-    raise e
 
 
 # --- Pydantic Modelleri ---
@@ -82,18 +67,20 @@ class AgentEvaluator:
     LLM-as-a-judge (Yargıç olarak LLM) yaklaşımını kullanarak 
     agent konuşmalarını değerlendiren sınıf.
     """
-    def __init__(self, model: str = "o4-mini-2025-04-16"):
+    def __init__(self, model: Optional[str] = None):
         """
         Değerlendiriciyi başlatır.
         
         Args:
-            model (str): Değerlendirme için kullanılacak OpenAI modelinin adı.
+            model (str, optional): Değerlendirme için kullanılacak OpenAI modelinin adı. 
+                                   Belirtilmezse config'den alınır.
         """
-        self.model = model
-        self.client = client
+        settings = get_settings()
+        self.model = model or settings.LLM_MODEL
+        self.async_client = instructor.patch(openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY))
         logger.info(f"AgentEvaluator başlatıldı. Model: {self.model}")
 
-    def evaluate_conversation(
+    async def evaluate_conversation(
         self,
         user_query: str,
         agent_response: str,
@@ -103,19 +90,7 @@ class AgentEvaluator:
         tool_calls: Optional[List[dict]] = None
     ) -> Optional[EvaluationMetrics]:
         """
-        Bir konuşma turunu (kullanıcı sorusu ve agent yanıtı) tüm boyutlarda değerlendirir.
-        
-        Args:
-            user_query (str): Kullanıcının sorduğu soru.
-            agent_response (str): Agent'ın verdiği yanıt.
-            agent_goal (str): Agent'ın ana görevi/hedefi.
-            rag_context (str): RAG sistemi tarafından bulunan ilgili bilgi.
-            agent_persona (str): Agent için tanımlanmış persona.
-            tool_calls (Optional[List[dict]]): Agent tarafından yapılan araç çağrıları.
-            
-        Returns:
-            EvaluationMetrics: Değerlendirme sonuçlarını içeren Pydantic modeli.
-                               Hata durumunda None döner.
+        Bir konuşma turunu (kullanıcı sorusu ve agent yanıtı) tüm boyutlarda asenkron olarak değerlendirir.
         """
         tool_calls_str = str(tool_calls) if tool_calls else "Yok"
         logger.info(f"Tekli konuşma değerlendirmesi başlatıldı. Sorgu: '{user_query[:50]}...'")
@@ -147,7 +122,7 @@ class AgentEvaluator:
         --- ÇIKTI (SADECE JSON) ---
         """
         try:
-            evaluation = self.client.chat.completions.create(  # type: ignore
+            evaluation = await self.async_client.chat.completions.create(  # type: ignore
                 model=self.model,
                 response_model=EvaluationMetrics,
                 messages=[
@@ -161,22 +136,14 @@ class AgentEvaluator:
             logger.error(f"Değerlendirme sırasında bir hata oluştu: {e}", exc_info=True)
             return None
 
-    def evaluate_session(
+    async def evaluate_session(
         self,
         full_conversation: List[Dict[str, str]],
         agent_goal: str,
         agent_persona: str,
     ) -> Optional[EvaluationMetrics]:
         """
-        Tüm bir konuşma oturumunu bütünsel olarak değerlendirir.
-        
-        Args:
-            full_conversation (List[Dict[str, str]]): {"role": "...", "content": "..."} formatında mesaj listesi.
-            agent_goal (str): Agent'ın ana hedefi.
-            agent_persona (str): Agent'ın kişiliği.
-            
-        Returns:
-            EvaluationMetrics: Değerlendirme sonuçlarını içeren Pydantic modeli.
+        Tüm bir konuşma oturumunu bütünsel olarak asenkron değerlendirir.
         """
         conversation_str = "\n".join([f"- {msg['role']}: {msg['content']}" for msg in full_conversation])
         logger.info(f"Oturum değerlendirmesi başlatıldı. Oturumda {len(full_conversation)} mesaj var.")
@@ -187,7 +154,7 @@ class AgentEvaluator:
         Tek tek mesajlara değil, konuşmanın geneline odaklan.
 
         --- DEĞERLENDİRME KRİTERLERİ VE PUANLAMA ---
-        1.  **goal_adherence**: Konuşma boyunca agent, ana görevine ({agent_goal}) ne kadar sadık kaldı? [Puan: 1 (Evet) veya 0 (Hayır)]
+        1.  **goal_adherence**: Konuşma boyunca agent, ana görevine ({agent_goal}) ne kadar sadık kaldı mı? [Puan: 1 (Evet) veya 0 (Hayır)]
         2.  **groundedness**: Agent'ın verdiği yanıtlar, varsayılan bilgi tabanına ne kadar dayalıydı? Kanıtlanmamış iddialarda bulundu mu? [Puan: 0.0-1.0]
         3.  **answer_relevance**: Agent'ın yanıtları, kullanıcının sorularına genel olarak ne kadar alakalı ve tatmin ediciydi? [Puan: 0.0-1.0]
         4.  **persona_compliance**: Agent'ın üslubu, konuşma boyunca kendisine tanımlanan kişilikle ({agent_persona}) ne kadar uyumlu? [Puan: 0.0-1.0]
@@ -207,7 +174,7 @@ class AgentEvaluator:
         --- ÇIKTI (SADECE JSON) ---
         """
         try:
-            evaluation = self.client.chat.completions.create(  # type: ignore
+            evaluation = await self.async_client.chat.completions.create(  # type: ignore
                 model=self.model,
                 response_model=EvaluationMetrics,
                 messages=[
@@ -221,8 +188,7 @@ class AgentEvaluator:
             logger.error(f"Oturum değerlendirme sırasında bir hata oluştu: {e}", exc_info=True)
             return None
 
-# Örnek kullanım (test için)
-if __name__ == "__main__":
+async def main_async():
     # Örnek veriler
     test_user_query = "Köpeğim için en iyi mama hangisi ve fiyatları nedir?"
     test_agent_response = "Farklı markalarımız var. Örneğin 'Süper Mama' oldukça popülerdir ve fiyatı 50 TL'dir. Bu mama, köpeğinizin sağlığı için gerekli tüm vitaminleri içerir."
@@ -233,7 +199,7 @@ if __name__ == "__main__":
 
     # Değerlendiriciyi oluştur ve çalıştır
     evaluator = AgentEvaluator()
-    evaluation_result = evaluator.evaluate_conversation(
+    evaluation_result = await evaluator.evaluate_conversation(
         user_query=test_user_query,
         agent_response=test_agent_response,
         agent_goal=test_agent_goal,
@@ -246,4 +212,8 @@ if __name__ == "__main__":
         print("Değerlendirme Sonucu:")
         print(evaluation_result.model_dump_json(indent=2))
     else:
-        logger.warning("Değerlendirme sonucu alınamadı.") 
+        logger.warning("Değerlendirme sonucu alınamadı.")
+
+# Örnek kullanım (test için)
+if __name__ == "__main__":
+    asyncio.run(main_async()) 

@@ -9,14 +9,13 @@ from dotenv import load_dotenv
 import openai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tiktoken
+import asyncio
+
+from src.config import get_settings
 
 # Logging ve Konfigürasyon
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-DB_PATH = "./chroma_db_openai"
-COLLECTION_NAME = "agents_openai"
-MODEL_NAME = "text-embedding-3-small"
-KNOWLEDGE_BASE_FILE = "agent_knowledge_base.csv"
 
 def process_batch_recursively(embedding_service: AgentEmbeddingService, docs: List[str], metadatas: List[Dict], ids: List[str]):
     """
@@ -53,11 +52,15 @@ def process_batch_recursively(embedding_service: AgentEmbeddingService, docs: Li
         # Diğer beklenmedik hatalar
         logger.error(f"{len(docs)} dokümanlık batch işlenirken genel bir hata oluştu ve atlandı. Hata: {e}")
 
-def main():
+async def main():
     """
     Veritabanını sıfırdan ve tutarlı bir şekilde yeniden inşa eder.
     Bu script, projenin en önemli adımıdır ve tutarlı bir vektör veritabanı oluşturur.
     """
+    settings = get_settings()
+    db_path = settings.CHROMA_PERSIST_DIRECTORY
+    knowledge_base_file = settings.KNOWLEDGE_BASE_FILE
+
     try:
         logger.info("="*50 + "\nAdım 1: ETL süreci başlatılıyor...")
         etl_processor = AgentDataProcessor()
@@ -67,13 +70,13 @@ def main():
         logger.info("="*50)
         logger.info("Adım 2: OpenAI ile Vektör Veritabanı Kurulumu...")
 
-        if os.path.exists(DB_PATH):
-            logger.info(f"Mevcut veritabanı klasörü '{DB_PATH}' temizleniyor...")
-            shutil.rmtree(DB_PATH)
+        if os.path.exists(db_path):
+            logger.info(f"Mevcut veritabanı klasörü '{db_path}' temizleniyor...")
+            shutil.rmtree(db_path)
 
-        embedding_service = AgentEmbeddingService(persist_directory=DB_PATH)
+        embedding_service = AgentEmbeddingService() # Bu zaten ayarları içeriden kullanıyor
         
-        df = pd.read_csv(KNOWLEDGE_BASE_FILE)
+        df = pd.read_csv(knowledge_base_file)
         
         logger.info("OpenAI API'si ile embedding'ler oluşturuluyor... Bu işlem API kullanımınıza ve veri boyutuna göre zaman alabilir ve maliyet oluşturabilir.")
 
@@ -142,7 +145,7 @@ def main():
         for i, (batch_docs, batch_metadatas, batch_ids) in enumerate(batches):
             logger.info(f"Batch {i + 1}/{len(batches)} işleniyor... (Bu batch'te {len(batch_docs)} doküman var)")
             try:
-                embeddings = embedding_service.create_openai_embeddings(batch_docs)
+                embeddings = await embedding_service.create_openai_embeddings(batch_docs)
                 if embeddings:
                     embedding_service.collection.add(
                         embeddings=embeddings,      # type: ignore
@@ -155,7 +158,7 @@ def main():
                 continue
     
         logger.info("="*50 + "\nVERİTABANI YENİDEN İNŞA ETME İŞLEMİ TAMAMLANDI!")
-        logger.info(f"OpenAI tabanlı yeni veritabanı '{DB_PATH}' içinde oluşturuldu.")
+        logger.info(f"OpenAI tabanlı yeni veritabanı '{db_path}' içinde oluşturuldu.")
 
     except Exception as e:
         logger.error(f"Kritik hata: {e}", exc_info=True)
@@ -165,4 +168,4 @@ def run_etl():
     # ... existing code ...
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 
