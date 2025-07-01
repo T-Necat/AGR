@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import asyncio
 from celery import Task
+from io import StringIO
 from .celery_app import celery_app
 from .evaluation.evaluator import AgentEvaluator
 from typing import Optional, List, Dict
@@ -93,7 +94,7 @@ def evaluate_and_summarize_session_task(self: Task, session_data_json: str) -> D
     """
     evaluator = AgentEvaluator()
     try:
-        session_df = pd.read_json(session_data_json, orient='split')
+        session_df = pd.read_json(StringIO(session_data_json), orient='split')
         if session_df.empty:
             return {"error": "Oturum verisi boş."}
     except Exception as e:

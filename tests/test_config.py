@@ -103,5 +103,5 @@ def test_settings_missing_required_variable(monkeypatch):
     monkeypatch.delenv("API_KEY", raising=False)
 
     # Expect a Pydantic ValidationError
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError): # type: ignore
         get_settings() 
