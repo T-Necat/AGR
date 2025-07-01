@@ -1,0 +1,18 @@
+# Bu dosyayı .env olarak kopyalayın ve kendi API anahtarlarınızı girin.
+# Bu dosya, .gitignore tarafından GİZLENMEZ, bu nedenle buraya ASLA gerçek anahtar girmeyin.
+OPENAI_API_KEY="YOUR_API_KEY_HERE"
+LANGCHAIN_API_KEY="YOUR_API_KEY_HERE"
+
+# Embedding Model
+EMBEDDING_MODEL=text-embedding-3-small
+
+# LLM Model
+LLM_MODEL= gpt-4.1-mini-2025-04-14
+
+# ChromaDB Settings
+CHROMA_PERSIST_DIRECTORY=./chroma_db
+
+# RAG Settings
+TOP_K_RESULTS=3
+SIMILARITY_THRESHOLD=0.7
+TEMPERATURE=0.0 
