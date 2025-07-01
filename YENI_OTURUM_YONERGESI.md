@@ -1,26 +1,23 @@
-# Yeni Veri/Oturum Ekleme Yönergesi
+# Yeni Veri/Oturum Ekleme ve GitHub Yükleme Yönergesi
 
-Bu proje, büyük veri dosyalarını (CSV, veritabanı dosyaları vb.) doğrudan GitHub repositorisinde saklamayacak şekilde yapılandırılmıştır. Reponun boyutunu küçük ve yönetilebilir tutmak, projenin performansını ve taşınabilirliğini korumak için bu kritik öneme sahiptir.
+Bu proje, büyük veri dosyalarını (CSV, veritabanı dosyaları vb.) ve hassas bilgileri (API Anahtarları) doğrudan GitHub repositorisinde saklamayacak şekilde yapılandırılmıştır. Reponun boyutunu küçük ve yönetilebilir tutmak, projenin performansını ve güvenliğini korumak için bu kritik öneme sahiptir.
 
-## Yeni Bir Veri Seti Eklerken İzlenecek Adımlar
+## Veri ve Konfigürasyon Yönetimi
 
-1.  **Verileri Doğru Klasöre Koyun:**
-    Yeni sohbet, persona veya görev verilerinizi içeren `.csv` dosyalarını `src/data/` klasörünün içine yerleştirin.
+### 1. Veri Dosyaları (`src/data/`)
+- **TÜM VERİ DOSYALARI `src/data/` klasörüne yerleştirilmelidir.**
+- Bu klasör ve içindeki `.csv` uzantılı dosyalar (`feedback.csv` dahil) `.gitignore` tarafından **tamamen göz ardı edilmektedir.**
+- **KESİNLİKLE `git add -f` gibi komutlarla bu dosyaları repoya eklemeye çalışmayın.**
 
-2.  **`.gitignore` Kontrolü:**
-    Projenin kök dizinindeki `.gitignore` dosyası, `*.csv`, `*.sqlite3` gibi yaygın veri dosyası uzantılarını zaten hariç tutacak şekilde yapılandırılmıştır. Bu sayede, bu klasörlere eklediğiniz veri dosyaları otomatik olarak `git` tarafından göz ardı edilecektir.
+### 2. API Anahtarları (`.env`)
+- API anahtarınız `src/.env` dosyasında saklanmalıdır.
+- Bu dosya da `.gitignore` tarafından göz ardı edilir ve **asla** GitHub'a gönderilmez.
 
-3.  **ASLA `git add` ile Büyük Dosya Eklemeyin:**
-    `git add .` komutunu çalıştırmadan önce, yeni eklediğiniz büyük veri dosyalarının `.gitignore` kuralları tarafından kapsandığından emin olun. `git status` komutu, hangi dosyaların ekleneceğini size gösterecektir. Listede büyük bir veri dosyası görüyorsanız, `.gitignore` dosyasını kontrol edip güncellemeniz gerekir.
-
-4.  **Veritabanlarını Hariç Tutun:**
-    Uygulama çalıştırıldığında oluşturulan ChromaDB veritabanları (`chroma_db_...` klasörleri) da `.gitignore` tarafından otomatik olarak hariç tutulur. Bu klasörleri de asla repoya eklemeyin.
-
-Bu basit kurallara uymak, reponun temiz, hızlı ve herkes için kolayca kullanılabilir kalmasını sağlayacaktır.
+Bu basit kurallara uymak, reponun temiz, hızlı ve herkes için güvenli kalmasını sağlayacaktır.
 
 ---
 
-## 🚀 GitHub Yükleme Bilgileri
+## 🚀 GitHub'a Değişiklik Gönderme
 
 Bu projeye yapılan tüm katkılar, belirli bir GitHub profili ve repositorisine gönderilmelidir.
 

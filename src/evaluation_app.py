@@ -3,15 +3,20 @@ import pandas as pd
 import os
 import sys
 import json
+import time
 from typing import Dict, List, Optional
 from streamlit_option_menu import option_menu
+import datetime
+from celery.result import AsyncResult
 
 # Proje kök dizinini sisteme tanıtarak diğer modülleri import et
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.celery_app import celery_app
 from src.vector_db.embedding_service import AgentEmbeddingService
 from src.rag.rag_pipeline import RAGPipeline
 from src.evaluation.evaluator import AgentEvaluator, EvaluationMetrics
+from src.tasks import batch_evaluate_task
 
 # --- Sayfa Yapılandırması ---
 st.set_page_config(
@@ -44,6 +49,20 @@ def initialize_services() -> Optional[AgentEvaluator]:
         return None
 
 evaluator = initialize_services()
+FEEDBACK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "feedback.csv")
+
+# --- Geri Bildirim Fonksiyonları ---
+def save_feedback(evaluation_data: dict, feedback: str):
+    """Kullanıcı geri bildirimini bir CSV dosyasına kaydeder."""
+    try:
+        feedback_df = pd.DataFrame([{"timestamp": datetime.datetime.now(), "feedback": feedback, **evaluation_data}])
+        
+        # Dosya zaten varsa, başlık olmadan ekle, yoksa dosyayı oluştur
+        header = not os.path.exists(FEEDBACK_FILE)
+        feedback_df.to_csv(FEEDBACK_FILE, mode='a', header=header, index=False)
+        st.toast(f"Geri bildiriminiz kaydedildi: {feedback}", icon="👍" if feedback == "olumlu" else "👎")
+    except Exception as e:
+        st.error(f"Geri bildirim kaydedilirken hata oluştu: {e}")
 
 # --- Veri İşleme Fonksiyonları ---
 @st.cache_data
@@ -93,6 +112,28 @@ def load_default_data(data_path: str) -> pd.DataFrame:
         st.error(f"Veri dosyası bulunamadı: {e.filename}")
         return pd.DataFrame()
 
+@st.cache_data
+def load_and_merge_raw_data(data_path: str) -> pd.DataFrame:
+    """Varsayılan veri dosyalarını yükler ve birleştirir, ancak QA formatına dönüştürmez."""
+    try:
+        chats_df = pd.read_csv(os.path.join(data_path, "ai_agent_chat_messages_june_18_25.csv"))
+        personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
+        tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
+        
+        personas_df.rename(columns={'created_at': 'persona_created_at'}, inplace=True)
+        tasks_df.rename(columns={'created_at': 'task_created_at'}, inplace=True)
+    
+        personas_df = personas_df.sort_values('persona_created_at').drop_duplicates('agent_id', keep='last')
+        tasks_df = tasks_df.sort_values('task_created_at').drop_duplicates('agent_id', keep='last')
+        
+        merged_df = pd.merge(chats_df, personas_df, on='agent_id', how='left')
+        merged_df = pd.merge(merged_df, tasks_df, on='agent_id', how='left')
+        
+        return merged_df.dropna(subset=['content', 'persona', 'tasks'])
+    except FileNotFoundError as e:
+        st.error(f"Veri dosyası bulunamadı: {e.filename}")
+        return pd.DataFrame()
+
 # --- Değerlendirme Fonksiyonu ---
 def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
     """Tek bir konuşma verisi için değerlendirmeyi çalıştırır."""
@@ -127,6 +168,11 @@ def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
         return
         
     st.header("📊 Değerlendirme Sonuçları")
+    # Değerlendirmenin benzersiz bir anahtarını oluşturmak için session state kullan
+    if 'current_eval_result' not in st.session_state or st.session_state.current_eval_result != evaluation_result:
+        st.session_state.current_eval_result = evaluation_result
+        st.session_state.feedback_given = False # Yeni sonuç için geri bildirimi sıfırla
+
     cols = st.columns(4)
     metrics_to_show = {
         "Goal Adherence": evaluation_result.goal_adherence,
@@ -148,28 +194,24 @@ def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
             with st.expander("Gerekçeyi Gör"):
                 st.write(metric.reasoning)
         col_idx += 1
-
-@st.cache_data
-def load_and_merge_raw_data(data_path: str) -> pd.DataFrame:
-    """Varsayılan veri dosyalarını yükler ve birleştirir, ancak QA formatına dönüştürmez."""
-    try:
-        chats_df = pd.read_csv(os.path.join(data_path, "ai_agent_chat_messages_june_18_25.csv"))
-        personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
-        tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
-        
-        personas_df.rename(columns={'created_at': 'persona_created_at'}, inplace=True)
-        tasks_df.rename(columns={'created_at': 'task_created_at'}, inplace=True)
     
-        personas_df = personas_df.sort_values('persona_created_at').drop_duplicates('agent_id', keep='last')
-        tasks_df = tasks_df.sort_values('task_created_at').drop_duplicates('agent_id', keep='last')
+    # --- Geri Bildirim Bölümü ---
+    if not st.session_state.get('feedback_given', False):
+        st.markdown("---")
+        st.subheader("Bu Değerlendirme Faydalı Oldu mu?")
+        feedback_cols = st.columns(8)
         
-        merged_df = pd.merge(chats_df, personas_df, on='agent_id', how='left')
-        merged_df = pd.merge(merged_df, tasks_df, on='agent_id', how='left')
-        
-        return merged_df.dropna(subset=['content', 'persona', 'tasks'])
-    except FileNotFoundError as e:
-        st.error(f"Veri dosyası bulunamadı: {e.filename}")
-        return pd.DataFrame()
+        if feedback_cols[0].button("👍 Olumlu", key=f"positive_feedback_{id(evaluation_result)}"):
+            save_feedback(evaluation_result.model_dump(), "olumlu")
+            st.session_state.feedback_given = True
+            st.rerun()
+
+        if feedback_cols[1].button("👎 Olumsuz", key=f"negative_feedback_{id(evaluation_result)}"):
+            save_feedback(evaluation_result.model_dump(), "olumsuz")
+            st.session_state.feedback_given = True
+            st.rerun()
+    else:
+        st.success("Bu değerlendirme için geri bildiriminiz alınmıştır. Teşekkürler!")
 
 def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
     """Tüm bir oturumu değerlendirir."""
@@ -212,8 +254,35 @@ if page == "Sandbox":
     st.header("🧪 Manuel Değerlendirme (Sandbox)")
     st.markdown("""
     Bu bölümde, belirlediğiniz bir senaryoya göre ajanın potansiyel performansını değerlendirebilirsiniz. 
-    Aşağıdaki alanları doldurarak varsayımsal bir durumu test edin.
+    Aşağıdaki alanları doldurarak varsayımsal bir durumu test edin veya hızlı test butonuyla önceden tanımlanmış bir senaryoyu çalıştırın.
     """)
+
+    if st.button("⚡ Hızlı Test Çalıştır (Geçici)", use_container_width=True, type="secondary"):
+        if evaluator:
+            with st.spinner("Hızlı test senaryosu değerlendiriliyor..."):
+                test_user_query = "Jotform'un ücretsiz planında kaç form oluşturabilirim ve bu formlara kaç yanıt alabilirim?"
+                test_agent_response = "Jotform'un ücretsiz planıyla 5 adede kadar form oluşturabilirsiniz. Bu formlar üzerinden aylık toplam 100 yanıt alabilirsiniz. Ayrıca 100 MB depolama alanınız olur."
+                test_agent_persona = "Yardımsever, profesyonel ve çözüm odaklı bir asistansınız. Kullanıcının sorununu net bir şekilde anlayıp etkili bir çözüm sunmaya odaklanmalısınız."
+                test_agent_goal = "Kullanıcının Jotform hakkındaki sorularını yanıtlamak ve onlara platformu en verimli şekilde nasıl kullanacakları konusunda rehberlik etmek."
+                rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{test_agent_response}'"
+                
+                result = evaluator.evaluate_conversation(
+                    user_query=test_user_query,
+                    agent_response=test_agent_response,
+                    agent_goal=test_agent_goal,
+                    rag_context=rag_context,
+                    agent_persona=test_agent_persona,
+                    tool_calls=None
+                )
+                st.session_state.eval_result = result
+                
+                with st.expander("Çalıştırılan Test Verisi", expanded=True):
+                    st.text_area("Kullanıcı Sorusu", value=test_user_query, disabled=True, height=100)
+                    st.text_area("Agent'ın Cevabı", value=test_agent_response, disabled=True, height=150)
+                    st.text_area("Agent'ın Personası", value=test_agent_persona, disabled=True, height=150)
+                    st.text_area("Agent'ın Görevi (Goal)", value=test_agent_goal, disabled=True, height=100)
+        else:
+            st.error("Değerlendirici servisi (Evaluator) başlatılamadı.")
 
     with st.form(key="sandbox_form"):
         user_query = st.text_area("👤 Kullanıcı Sorusu", height=100, placeholder="Ör: Jotform'un sunduğu farklı abonelik planları nelerdir?")
@@ -238,81 +307,98 @@ if page == "Sandbox":
                     agent_persona=agent_persona,
                     tool_calls=None
                 )
-                display_evaluation_results(result)
+                # Sonucu session_state'e kaydet ki geri bildirim için kullanılabilsin
+                st.session_state.eval_result = result
         else:
             st.error("Değerlendirici servisi (Evaluator) başlatılamadı.")
+
+    # Sandbox formu gönderildikten sonra sonucu göster
+    if 'eval_result' in st.session_state:
+        display_evaluation_results(st.session_state.eval_result)
 
 # --- Sayfa 2: Toplu Değerlendirme ---
 elif page == "Toplu Değerlendirme":
     st.header("📚 Dosya Yükleyerek Toplu Değerlendirme")
     st.markdown("""
-    Sohbet geçmişini içeren bir `.csv` dosyası yükleyerek tüm konuşmaları otomatik olarak değerlendirin.
-    **Not:** Yükleyeceğiniz dosyanın, `ai_agent_chat_messages_june_18_25.csv` ile aynı formatta olması beklenmektedir.
+    Sohbet geçmişini içeren bir `.csv` dosyası yükleyerek tüm konuşmaları **arka planda** otomatik olarak değerlendirin.
+    Bu işlem sırasında uygulamada gezinmeye devam edebilirsiniz.
     """)
 
     uploaded_file = st.file_uploader("Sohbet (.csv) dosyasını seçin", type="csv")
 
     if uploaded_file is not None:
         try:
-            # Yüklenen dosyadan bir DataFrame oluştur
             uploaded_chats_df = pd.read_csv(uploaded_file)
-            st.success(f"`{uploaded_file.name}` dosyası başarıyla yüklendi ve {len(uploaded_chats_df)} satır okundu.")
-            
-            # Bu ajanların persona ve task verilerini de varsayılan dosyalardan alalım
-            data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+            data_path = "src/data"
             personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
             tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
-
             batch_data = process_chat_data(uploaded_chats_df, personas_df, tasks_df)
 
-            if st.button(f"📚 {len(batch_data)} Konuşmayı Toplu Değerlendir", key="eval_batch", use_container_width=True, type="primary"):
-                if evaluator and not batch_data.empty:
-                    results = []
-                    progress_bar = st.progress(0, text="Değerlendirme başladı...")
-                    
-                    for i, (_, row) in enumerate(batch_data.iterrows()):
-                        result = run_evaluation(row, evaluator)
-                        if result:
-                            results.append(result.model_dump())
-                        progress_bar.progress((i + 1) / len(batch_data), text=f"Konuşma {i+1}/{len(batch_data)} değerlendiriliyor...")
-                    
-                    progress_bar.empty()
-                    st.success("Toplu değerlendirme tamamlandı!")
+            st.info(f"Yüklenen dosyadan değerlendirilmeye hazır {len(batch_data)} konuşma bulundu.")
 
-                    results_df = pd.DataFrame(results)
-                    
-                    # Sonuçları metrik sütunlarına ayır
-                    for metric in ["goal_adherence", "answer_relevance", "groundedness", "persona_compliance", "style_and_courtesy", "conciseness", "knowledge_boundary_violation", "security_policy_violation"]:
-                        if metric in results_df.columns:
-                            results_df[f'{metric}_score'] = results_df[metric].apply(lambda x: x['score'] if isinstance(x, dict) else None)
-                            results_df[f'{metric}_reasoning'] = results_df[metric].apply(lambda x: x['reasoning'] if isinstance(x, dict) else None)
+            if st.button(f"📚 {len(batch_data)} Konuşmayı Arka Planda Değerlendir", key="eval_batch_async", use_container_width=True, type="primary"):
+                if not batch_data.empty:
+                    # DataFrame'i Celery'ye göndermek için JSON'a çevir
+                    batch_data_json = batch_data.to_json(orient='split')
+                    task = batch_evaluate_task.delay(batch_data_json)
+                    st.session_state['batch_task_id'] = task.id
+                    st.success(f"Toplu değerlendirme görevi başlatıldı! Görev ID: {task.id}")
+                    st.info("İlerleme durumu aşağıda gösterilecektir. Bu sırada başka sayfalara gidebilirsiniz.")
+                else:
+                    st.warning("İşlenecek geçerli bir konuşma bulunamadı.")
+        except Exception as e:
+            st.error(f"Dosya işlenirken veya görev başlatılırken bir hata oluştu: {e}")
 
-                    # Genel istatistikleri göster
-                    st.subheader("Genel Metrikler")
+    # --- Görev Durumunu Kontrol Etme ve Sonuçları Gösterme ---
+    if 'batch_task_id' in st.session_state:
+        task_id = st.session_state['batch_task_id']
+        task_result = AsyncResult(task_id, app=celery_app)
+
+        st.markdown("---")
+        st.subheader("Görev İlerleme Durumu")
+        
+        if task_result.ready():
+            if task_result.successful():
+                st.success(f"Görev (ID: {task_id}) başarıyla tamamlandı!")
+                results = task_result.get()
+                results_df = pd.DataFrame(results)
+
+                # Sonuçları metrik sütunlarına ayır
+                for metric in ["goal_adherence", "answer_relevance", "groundedness", "persona_compliance", "style_and_courtesy", "conciseness", "knowledge_boundary_violation", "security_policy_violation"]:
+                    if metric in results_df.columns and not results_df.empty:
+                        results_df[f'{metric}_score'] = results_df[metric].apply(lambda x: x['score'] if isinstance(x, dict) else None)
+                        results_df[f'{metric}_reasoning'] = results_df[metric].apply(lambda x: x['reasoning'] if isinstance(x, dict) else None)
+                
+                # Genel istatistikleri göster
+                st.subheader("Genel Metrikler")
+                if not results_df.empty:
                     avg_cols = st.columns(4)
-                    avg_cols[0].metric("Toplam Konuşma", len(results_df))
+                    avg_cols[0].metric("Toplam Değerlendirme", len(results_df))
                     avg_cols[1].metric("Ort. Groundedness", f"{results_df['groundedness_score'].mean():.2f}")
                     avg_cols[2].metric("Ort. Relevance", f"{results_df['answer_relevance_score'].mean():.2f}")
                     avg_cols[3].metric("Ort. Style", f"{results_df['style_and_courtesy_score'].mean():.2f}")
+                
+                # Detaylı sonuçları göster
+                with st.expander("Tüm Değerlendirme Sonuçlarını Gör"):
+                    st.dataframe(results_df)
 
-
-                    # Detaylı sonuçları göster
-                    with st.expander("Tüm Değerlendirme Sonuçlarını Gör"):
-                        display_cols = ['chat_id', 'user_query', 'agent_response', 'goal_adherence_score', 'groundedness_score', 'answer_relevance_score']
-                        # Orijinal veriden sütunları ekle
-                        display_df = batch_data[['chat_id', 'user_query', 'agent_response']].reset_index(drop=True)
-                        scores_df = results_df[[col for col in results_df.columns if '_score' in col]].reset_index(drop=True)
-                        full_display_df = pd.concat([display_df, scores_df], axis=1)
-                        
-                        st.dataframe(full_display_df)
-
-                elif batch_data.empty:
-                    st.warning("Yüklenen dosyadan işlenecek geçerli bir konuşma bulunamadı.")
-                else:
-                    st.error("Değerlendirici servisi (Evaluator) başlatılamadı.")
-
-        except Exception as e:
-            st.error(f"Dosya işlenirken bir hata oluştu: {e}") 
+                # Sonuçları gösterdikten sonra task id'yi temizle
+                del st.session_state['batch_task_id']
+            else:
+                st.error(f"Görev (ID: {task_id}) bir hatayla sonuçlandı: {task_result.info}")
+                del st.session_state['batch_task_id']
+        else:
+            # Görev hala çalışıyor, ilerlemeyi göster
+            progress_meta = task_result.info or {'current': 0, 'total': 1}
+            current = progress_meta.get('current', 0)
+            total = progress_meta.get('total', 1)
+            
+            progress_percent = (current / total) if total > 0 else 0
+            st.progress(progress_percent, text=f"Değerlendiriliyor... ({current}/{total})")
+            
+            # Sayfanın periyodik olarak yenilenmesini tetikle
+            time.sleep(5)
+            st.rerun()
 
 # --- Sayfa 3: Oturum Değerlendirme ---
 elif page == "Oturum Analizi":

@@ -18,7 +18,7 @@ __pycache__/
 .DS_Store
 
 # Data files
-*.csv
+src/data/*.csv
 
 # Databases
 *.db

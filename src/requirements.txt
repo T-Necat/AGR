@@ -15,4 +15,6 @@ tiktoken>=0.5.0
 requests>=2.28.0
 instructor>=1.0.0
 streamlit
-streamlit-option-menu 
+streamlit-option-menu
+celery>=5.3.6
+redis>=5.0.4 
