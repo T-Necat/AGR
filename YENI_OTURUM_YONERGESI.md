@@ -16,4 +16,19 @@ Bu proje, büyük veri dosyalarını (CSV, veritabanı dosyaları vb.) doğrudan
 4.  **Veritabanlarını Hariç Tutun:**
     Uygulama çalıştırıldığında oluşturulan ChromaDB veritabanları (`chroma_db_...` klasörleri) da `.gitignore` tarafından otomatik olarak hariç tutulur. Bu klasörleri de asla repoya eklemeyin.
 
-Bu basit kurallara uymak, reponun temiz, hızlı ve herkes için kolayca kullanılabilir kalmasını sağlayacaktır. 
+Bu basit kurallara uymak, reponun temiz, hızlı ve herkes için kolayca kullanılabilir kalmasını sağlayacaktır.
+
+---
+
+## 🚀 GitHub Yükleme Bilgileri
+
+Bu projeye yapılan tüm katkılar, belirli bir GitHub profili ve repositorisine gönderilmelidir.
+
+- **GitHub Repository:** `T-Necat/AGR`
+- **Profil ve Kimlik Doğrulama:** Bu repoya erişim, özel bir yapılandırma dosyası ile yönetilmektedir. Katkıda bulunmadan önce, aşağıdaki komutla doğru profilin etkinleştirildiğinden emin olun:
+  ```bash
+  # Özel yapılandırma dosyasını kopyalayarak kısıtlı profili etkinleştirir.
+  cp ~/.config/gh/hosts-kisitli.yaml ~/.config/gh/hosts.yml
+  ```
+
+Bu adımlar, projenin tutarlılığını ve güvenliğini korumak için zorunludur. 
