@@ -31,3 +31,6 @@ src/api/chroma_db_4090/
 build/
 dist/
 *.egg-info/
+
+# User-provided data folder
+jotform-data/
