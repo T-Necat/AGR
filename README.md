@@ -1,70 +1,85 @@
-# AI Agent Değerlendirme Sistemi
+# Jotform Agent Insight & Recommendation API (MVP)
 
-Bu proje, yapay zeka ajanlarının konuşma performansını analiz etmek ve değerlendirmek için geliştirilmiş bir Streamlit uygulamasıdır. LLM-as-a-judge (Yargıç olarak LLM) yaklaşımını kullanarak, ajan yanıtlarını çeşitli metriklere göre objektif bir şekilde puanlar.
+Bu proje, iki ana bileşenden oluşan bir yapay zeka destekli ajan yönetim sistemidir:
 
-![Uygulama Arayüzü](agent_recommendation_system_final copy/assets/Jotform-New-Logo.png) 
-*Not: Bu görsel yerine uygulamanın ekran görüntüsünü koymak daha açıklayıcı olabilir.*
+1.  **Agent Recommendation API:** Kullanıcı sorgularına göre en uygun yapay zeka ajanını öneren bir FastAPI tabanlı API.
+2.  **Agent Insight Dashboard:** Yapay zeka ajanlarının konuşma performansını analiz etmek ve değerlendirmek için geliştirilmiş bir Streamlit tabanlı arayüz.
 
 ---
 
-## 🚀 Temel Özellikler
-
-- **🧪 Sandbox (Manuel Değerlendirme):** Ajanın potansiyel performansını test etmek için manuel olarak kullanıcı sorusu, ajan cevabı, persona ve hedef girerek anında değerlendirme alın.
-- **📚 Toplu Değerlendirme:** Sohbet geçmişini içeren bir `.csv` dosyası yükleyerek tüm konuşmaları tek seferde değerlendirin ve genel istatistikleri görüntüleyin.
-- **💬 Oturum Analizi:** Kayıtlı bir konuşma oturumunu baştan sona inceleyin ve tüm diyalog için bütünsel bir değerlendirme alın.
-- **📊 Detaylı Metrikler:** Ajan performansını aşağıdaki gibi çok yönlü metriklerle ölçün:
-  - Amaca Uygunluk (Goal Adherence)
-  - Temellendirme (Groundedness)
-  - Cevap Alaka Düzeyi (Answer Relevance)
-  - Persona Uyumu (Persona Compliance)
-  - Üslup ve Nezaket (Style & Courtesy)
-  - Özlük (Conciseness)
-  - Bilgi Sınırı ve Güvenlik İhlalleri
-
 ## 🛠️ Kullanılan Teknolojiler
 
+- **API:** FastAPI, Uvicorn
 - **Arayüz:** Streamlit, Streamlit Option Menu
 - **Dil Modelleri:** OpenAI API (GPT-4, o4-mini vb.)
-- **Yapılandırılmış Çıktı:** `instructor` kütüphanesi
+- **RAG & Yapılandırılmış Çıktı:** LangChain, `instructor`
 - **Vektör Veritabanı:** ChromaDB
 - **Veri İşleme:** Pandas
 
 ---
 
-## ⚙️ Kurulum ve Çalıştırma
+## ⚙️ Kurulum
 
-### 1. Projeyi Klonlama
-
+### 1. Projeyi Klonlama (Eğer Gerekliyse)
 ```bash
-git clone https://github.com/T-Necat/AGR.git
-cd AGR
+git clone <projenizin_repo_url'si>
+cd jotform-agent-insight-mvp
 ```
 
 ### 2. Bağımlılıkları Yükleme
-
 Projeyi çalıştırmak için gerekli olan tüm kütüphaneleri yükleyin. Bir sanal ortam (virtual environment) kullanmanız şiddetle tavsiye edilir.
 
 ```bash
-pip install -r agent_recommendation_system_final copy/requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+pip install -r src/requirements.txt
 ```
 
 ### 3. API Anahtarlarını Ayarlama
+Projenin OpenAI API'sine erişmesi gerekmektedir. `src/` klasörü içindeki `env_example.txt` dosyasını kopyalayarak `.env` adında yeni bir dosya oluşturun ve kendi OpenAI API anahtarınızı girin.
 
-Projenin OpenAI API'sine erişmesi gerekmektedir. `agent_recommendation_system_final copy/` klasörü içindeki `env_example.txt` dosyasını kopyalayarak `.env` adında yeni bir dosya oluşturun ve kendi OpenAI API anahtarınızı girin.
-
+```sh
+cp src/env_example.txt src/.env
 ```
-# agent_recommendation_system_final copy/.env dosyası
-
+Daha sonra `src/.env` dosyasını düzenleyerek anahtarınızı girin:
+```
+# src/.env dosyası
 OPENAI_API_KEY="sk-..."
 ```
-**Not:** `.env` dosyası `.gitignore` tarafından korunmaktadır ve asla GitHub'a gönderilmez.
 
-### 4. Uygulamayı Çalıştırma
+### 4. Veritabanını Oluşturma
+Sistemin ihtiyaç duyduğu vektör veritabanını oluşturmak için aşağıdaki betiği çalıştırın. Bu betik, `agent_knowledge_base.csv` dosyasını işleyerek ChromaDB veritabanını oluşturur.
 
-Tüm kurulum adımları tamamlandıktan sonra, aşağıdaki komutla Streamlit uygulamasını başlatabilirsiniz:
+**Not:** Bu işlem, verilerinizi vektöre çevirmek için OpenAI'nin embedding API'sini kullanır ve API kredinizi tüketerek maliyet oluşturabilir.
 
 ```bash
-streamlit run "agent_recommendation_system_final copy/evaluation_app.py"
+python src/rebuild_database.py
 ```
 
-Uygulama yerel ağınızda başlayacak ve tarayıcınızda otomatik olarak bir sekme açılacaktır. 
+---
+
+## 🚀 Uygulamaları Çalıştırma
+
+Kurulum tamamlandıktan sonra, API'yi veya değerlendirme arayüzünü ayrı ayrı çalıştırabilirsiniz.
+
+### 1. Agent Recommendation API (FastAPI)
+
+API sunucusunu başlatmak için:
+```bash
+python src/api/main.py
+```
+Sunucu varsayılan olarak `http://127.0.0.1:8000` adresinde çalışmaya başlayacaktır. API'yi test etmek için aşağıdaki `curl` komutunu kullanabilirsiniz:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/recommend" \
+     -H "Content-Type: application/json" \
+     -d '{"query": "I need help with a customer service issue regarding my account billing."}'
+```
+
+### 2. Agent Insight Dashboard (Streamlit)
+
+Değerlendirme arayüzünü başlatmak için:
+```bash
+streamlit run src/evaluation_app.py
+```
+Uygulama yerel ağınızda başlayacak ve tarayıcınızda otomatik olarak bir sekme açılacaktır.

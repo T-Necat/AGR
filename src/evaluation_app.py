@@ -9,9 +9,9 @@ from streamlit_option_menu import option_menu
 # Proje kök dizinini sisteme tanıtarak diğer modülleri import et
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from vector_db.embedding_service import AgentEmbeddingService
-from rag.rag_pipeline import RAGPipeline
-from evaluation.evaluator import AgentEvaluator, EvaluationMetrics
+from src.vector_db.embedding_service import AgentEmbeddingService
+from src.rag.rag_pipeline import RAGPipeline
+from src.evaluation.evaluator import AgentEvaluator, EvaluationMetrics
 
 # --- Sayfa Yapılandırması ---
 st.set_page_config(
@@ -30,7 +30,7 @@ Bu panel, kaydedilmiş ajan konuşmalarını analiz etmek ve ajanların performa
 def initialize_services() -> Optional[AgentEvaluator]:
     """Gerekli servisleri başlatır ve önbelleğe alır."""
     try:
-        project_root = os.path.dirname(os.path.abspath(__file__))
+        project_root = "src"
         db_path = os.path.join(project_root, "chroma_db_openai")
         
         embedding_service = AgentEmbeddingService(persist_directory=db_path)
@@ -196,7 +196,7 @@ def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator)
 with st.sidebar:
     # Projeyi taşınabilir hale getirmek için yerel ve göreceli bir yol kullanın.
     # 'use_column_width' genellikle daha iyi kalite için genişliği optimize eder.
-    st.image("agent_recommendation_system_final copy/assets/Jotform-New-Logo.png", use_container_width='auto')
+    st.image("src/assets/Jotform-New-Logo.png", use_container_width='auto')
     st.title("AI Agent Değerlendirme")
     
     page = option_menu(
@@ -259,7 +259,7 @@ elif page == "Toplu Değerlendirme":
             st.success(f"`{uploaded_file.name}` dosyası başarıyla yüklendi ve {len(uploaded_chats_df)} satır okundu.")
             
             # Bu ajanların persona ve task verilerini de varsayılan dosyalardan alalım
-            data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_agent_data_june_18_25_")
+            data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
             personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
             tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
 
@@ -317,7 +317,7 @@ elif page == "Toplu Değerlendirme":
 # --- Sayfa 3: Oturum Değerlendirme ---
 elif page == "Oturum Analizi":
     st.header("💬 Sohbet Oturumu Seçimi ve Analizi")
-    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_agent_data_june_18_25_")
+    data_path = "src/data"
     session_raw_data = load_and_merge_raw_data(data_path)
 
     if not session_raw_data.empty:

@@ -5,7 +5,7 @@ Bu proje, büyük veri dosyalarını (CSV, veritabanı dosyaları vb.) doğrudan
 ## Yeni Bir Veri Seti Eklerken İzlenecek Adımlar
 
 1.  **Verileri Doğru Klasöre Koyun:**
-    Yeni sohbet, persona veya görev verilerinizi içeren `.csv` dosyalarını `agent_recommendation_system_final copy/ai_agent_data_june_18_25_` gibi mevcut veri klasörlerinin içine yerleştirin veya yeni bir veri klasörü oluşturun.
+    Yeni sohbet, persona veya görev verilerinizi içeren `.csv` dosyalarını `src/data/` klasörünün içine yerleştirin.
 
 2.  **`.gitignore` Kontrolü:**
     Projenin kök dizinindeki `.gitignore` dosyası, `*.csv`, `*.sqlite3` gibi yaygın veri dosyası uzantılarını zaten hariç tutacak şekilde yapılandırılmıştır. Bu sayede, bu klasörlere eklediğiniz veri dosyaları otomatik olarak `git` tarafından göz ardı edilecektir.
