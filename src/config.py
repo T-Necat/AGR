@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -16,10 +17,10 @@ class Settings(BaseSettings):
 
     # Gerekli Ayarlar (varsayılan değeri yok)
     OPENAI_API_KEY: str
-    LANGCHAIN_API_KEY: str
     API_KEY: str
-
+    
     # Opsiyonel Ayarlar (varsayılan değerli)
+    LANGCHAIN_API_KEY: Optional[str] = None
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     LLM_MODEL: str = "gpt-4.1-mini-2025-04-14"
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

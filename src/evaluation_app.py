@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from streamlit_option_menu import option_menu
 import datetime
 from celery.result import AsyncResult
+import asyncio
 
 # Proje kök dizinini sisteme tanıtarak diğer modülleri import et
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,13 +36,8 @@ Bu panel, kaydedilmiş ajan konuşmalarını analiz etmek ve ajanların performa
 def initialize_services() -> Optional[AgentEvaluator]:
     """Gerekli servisleri başlatır ve önbelleğe alır."""
     try:
-        project_root = "src"
-        db_path = os.path.join(project_root, "chroma_db_openai")
-        
-        embedding_service = AgentEmbeddingService(persist_directory=db_path)
-        # Not: RAG Pipeline'ı tam olarak kullanmıyoruz, çünkü bağlam sohbet geçmişinden geliyor.
-        # Ancak değerlendirici için bir RAG context'i simüle etmemiz gerekebilir.
-        # rag_pipeline = RAGPipeline(embedding_service=embedding_service) 
+        # Servisler artık ayarları config dosyasından otomatik olarak alıyor.
+        embedding_service = AgentEmbeddingService()
         evaluator = AgentEvaluator()
         return evaluator
     except Exception as e:
@@ -213,7 +209,7 @@ def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
     else:
         st.success("Bu değerlendirme için geri bildiriminiz alınmıştır. Teşekkürler!")
 
-def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
+async def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
     """Tüm bir oturumu değerlendirir."""
     try:
         full_conversation = []
@@ -229,7 +225,7 @@ def run_session_evaluation(session_df: pd.DataFrame, _evaluator: AgentEvaluator)
         except (json.JSONDecodeError, TypeError):
             agent_goal = "Kullanıcıya yardımcı olmak."
 
-        return _evaluator.evaluate_session(full_conversation, agent_goal, str(agent_persona))
+        return await _evaluator.evaluate_session(full_conversation, agent_goal, str(agent_persona))
     except Exception as e:
         st.error(f"Oturum değerlendirme hatası: {e}")
         return None
@@ -266,14 +262,14 @@ if page == "Sandbox":
                 test_agent_goal = "Kullanıcının Jotform hakkındaki sorularını yanıtlamak ve onlara platformu en verimli şekilde nasıl kullanacakları konusunda rehberlik etmek."
                 rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{test_agent_response}'"
                 
-                result = evaluator.evaluate_conversation(
+                result = asyncio.run(evaluator.evaluate_conversation(
                     user_query=test_user_query,
                     agent_response=test_agent_response,
                     agent_goal=test_agent_goal,
                     rag_context=rag_context,
                     agent_persona=test_agent_persona,
                     tool_calls=None
-                )
+                ))
                 st.session_state.eval_result = result
                 
                 with st.expander("Çalıştırılan Test Verisi", expanded=True):
@@ -299,14 +295,14 @@ if page == "Sandbox":
             with st.spinner("Senaryo değerlendiriliyor..."):
                 rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{agent_response}'"
                 
-                result = evaluator.evaluate_conversation(
+                result = asyncio.run(evaluator.evaluate_conversation(
                     user_query=user_query,
                     agent_response=agent_response,
                     agent_goal=agent_goal,
                     rag_context=rag_context,
                     agent_persona=agent_persona,
                     tool_calls=None
-                )
+                ))
                 # Sonucu session_state'e kaydet ki geri bildirim için kullanılabilsin
                 st.session_state.eval_result = result
         else:
@@ -438,7 +434,7 @@ elif page == "Oturum Analizi":
             if st.button("🚀 Bu Oturumu Değerlendir", key="eval_session", use_container_width=True, type="primary"):
                 if evaluator and not session_df.empty:
                     with st.spinner("Oturum değerlendiriliyor..."):
-                        result = run_session_evaluation(session_df, evaluator)
+                        result = asyncio.run(run_session_evaluation(session_df, evaluator))
                         # Değerlendirme sonucunu session_state'e kaydet
                         st.session_state['session_eval_result'] = result
                 elif session_df.empty:
