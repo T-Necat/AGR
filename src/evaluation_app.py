@@ -585,7 +585,12 @@ elif page == "Toplu Değerlendirme":
             paginated_df = results_df.iloc[start_idx:end_idx]
 
             for _, row in paginated_df.iterrows():
-                st.markdown(f"**Chat ID:** `{row.get('chat_id', 'N/A')}` | **Genel Skor:** `{row.get('Overall Score', 0):.2f}`")
+                # 'Overall Score' sütununun varlığını kontrol et ve NaN ise 0 kullan
+                overall_score = row.get('Overall Score', 0)
+                if pd.isna(overall_score):
+                    overall_score = 0
+                
+                st.markdown(f"**Chat ID:** `{row.get('chat_id', 'N/A')}` | **Genel Skor:** `{overall_score:.2f}`")
                 with st.expander("Detayları ve Gerekçeleri Gör"):
                      st.markdown(f"**Kullanıcı Sorusu:** *{row.get('user_query', 'N/A')}*")
                      st.markdown(f"**Agent Cevabı:** *{row.get('agent_response', 'N/A')}*")
@@ -604,6 +609,35 @@ elif page == "Toplu Değerlendirme":
                      for name in metric_names:
                          reasoning = row.get(f"{name} Reasoning", "Gerekçe bulunamadı.")
                          st.markdown(f"- **{name}:** {reasoning}")
+                     
+                     # Aykırı Değer ve G-EVAL Analizlerini Göster
+                     outlier_analyses = row.get('outlier_analyses')
+                     g_eval_results = row.get('g_eval_results')
+
+                     if outlier_analyses or g_eval_results:
+                         st.divider()
+                         st.markdown("🕵️‍♂️ **Derinlemesine Analizler**")
+
+                     if outlier_analyses and isinstance(outlier_analyses, list):
+                         st.markdown("**Kök Neden Analizi (Düşük Skorlar):**")
+                         for analysis in outlier_analyses:
+                             st.info(f"**Metrik: {analysis['metric_name']}**\n- **Açıklama:** {analysis['explanation']}", icon="📉")
+
+                     if g_eval_results and isinstance(g_eval_results, dict):
+                         st.markdown("**G-EVAL Tutarlılık Denetimi:**")
+                         for metric_name, g_eval in g_eval_results.items():
+                             if g_eval['is_consistent']:
+                                 st.success(f"**Metrik: {metric_name.replace('_', ' ').title()}** - Tutarlı 👍", icon="✅")
+                             else:
+                                 st.warning(
+                                     f"""
+                                     **Metrik: {metric_name.replace('_', ' ').title()}** - Tutarsızlık Tespit Edildi 👎
+                                     - **Denetçi Notu:** {g_eval['re_evaluation_reasoning']}
+                                     - **Önerilen Skor:** {g_eval.get('corrected_score', 'N/A')}
+                                     """, 
+                                     icon="⚠️"
+                                 )
+
                 
             page_cols = st.columns([1, 1, 1])
             if st.session_state.page > 0:

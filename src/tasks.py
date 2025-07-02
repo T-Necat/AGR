@@ -38,30 +38,24 @@ async def _run_single_evaluation(eval_data: dict, current_evaluator: AgentEvalua
         
         rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{agent_response}'"
 
-        result = await current_evaluator.evaluate_conversation(
-            user_query=user_query, agent_response=agent_response,
-            agent_goal=agent_goal, rag_context=rag_context,
-            agent_persona=agent_persona, tool_calls=None
+        # Pydantic modelini kullanarak yeniden oluştur
+        eval_result = await current_evaluator.evaluate_conversation(
+            user_query=user_query,
+            agent_response=agent_response,
+            agent_goal=agent_goal,
+            rag_context=rag_context,
+            agent_persona=agent_persona,
+            tool_calls=None,
+            enable_outlier_analysis=True,  # Aykırı değer analizini aç
+            outlier_threshold=0.6,
+            enable_g_eval=True # G-EVAL denetimini de aç
         )
-        
-        if not result:
-            return None
-
-        # Orijinal verileri ve değerlendirme sonuçlarını birleştir
-        output_record = {
-            "chat_id": eval_data.get("chat_id"),
-            "agent_id": eval_data.get("agent_id"),
-            "user_query": user_query,
-            "agent_response": agent_response,
-        }
-        output_record.update(result.model_dump())
-        return output_record
-
+        if eval_result:
+            # Pydantic modelini tekrar dict'e çevirerek JSON uyumluluğunu sağla
+            return eval_result.model_dump()
+        return None
     except Exception as e:
-        logger.error(
-            f"Tekli değerlendirme sırasında hata oluştu. Veri: {eval_data.get('chat_id', 'N/A')}. Hata: {e}",
-            exc_info=True
-        )
+        logger.error(f"Tekil değerlendirme hatası (Chat ID: {eval_data.get('chat_id', 'N/A')}): {e}", exc_info=True)
         return None
 
 @celery_app.task(

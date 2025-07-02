@@ -215,7 +215,8 @@ async def chat_and_evaluate(request: ChatRequest, api_key: str = Security(get_ap
             agent_persona=request.agent_persona,
             tool_calls=tool_calls_data,
             enable_outlier_analysis=True,
-            outlier_threshold=0.6 # 0.6'dan düşük skorları analiz et
+            outlier_threshold=0.6, # 0.6'dan düşük skorları analiz et
+            enable_g_eval=True # G-EVAL denetimini de aktif et
         )
 
         if not evaluation_result:
