@@ -10,6 +10,7 @@ import openai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tiktoken
 import asyncio
+import argparse
 
 from src.config import get_settings
 
@@ -57,13 +58,22 @@ async def main():
     Veritabanını sıfırdan ve tutarlı bir şekilde yeniden inşa eder.
     Bu script, projenin en önemli adımıdır ve tutarlı bir vektör veritabanı oluşturur.
     """
+    parser = argparse.ArgumentParser(description="Agent verilerini işler ve vektör veritabanını yeniden oluşturur.")
+    parser.add_argument(
+        "--data-dir", 
+        type=str, 
+        default="src/data",
+        help="İşlenecek ham verilerin bulunduğu klasör."
+    )
+    args = parser.parse_args()
+
     settings = get_settings()
     db_path = settings.CHROMA_PERSIST_DIRECTORY
     knowledge_base_file = settings.KNOWLEDGE_BASE_FILE
 
     try:
         logger.info("="*50 + "\nAdım 1: ETL süreci başlatılıyor...")
-        etl_processor = AgentDataProcessor()
+        etl_processor = AgentDataProcessor(data_dir=args.data_dir)
         etl_processor.process_and_save()
         logger.info(f"ETL süreci tamamlandı.")
 
@@ -168,4 +178,6 @@ def run_etl():
     # ... existing code ...
 
 if __name__ == "__main__":
+    # Load environment variables from .env file
+    load_dotenv()
     asyncio.run(main()) 

@@ -395,23 +395,44 @@ elif page == "Toplu Değerlendirme":
         results_df = st.session_state.results_df.copy()
         
         # Sadece bir kere metrik sütunlarını oluştur
-        if 'Overall Score' not in results_df.columns:
-            metric_names_init = []
-            for col in results_df.columns:
-                if isinstance(results_df[col].iloc[0], dict) and 'score' in results_df[col].iloc[0]:
-                    metric_name = col.replace('_', ' ').title()
-                    if metric_name not in metric_names_init:
-                        metric_names_init.append(metric_name)
-                    results_df[f'{metric_name} Score'] = results_df[col].apply(lambda x: x.get('score') if isinstance(x, dict) else None)
-                    results_df[f'{metric_name} Reasoning'] = results_df[col].apply(lambda x: x.get('reasoning') if isinstance(x, dict) else None)
-            
-            overall_score_cols = [f'{name} Score' for name in metric_names_init if 'Violation' not in name and 'Boundary' not in name and 'Sentiment' not in name]
-            results_df['Overall Score'] = results_df[overall_score_cols].mean(axis=1)
-            st.session_state.results_df = results_df 
+        if 'Overall Score' not in results_df.columns and 'metrics' in results_df.columns:
+            # Hataları önlemek için 'metrics' sütununun dict olduğu satırları koru
+            results_df = results_df[results_df['metrics'].apply(isinstance, args=(dict,))].copy()
+
+            if not results_df.empty:
+                # İlk geçerli satırdan metrik isimlerini al
+                first_metrics_dict = results_df['metrics'].iloc[0]
+                metric_keys = list(first_metrics_dict.keys())
+                
+                for key in metric_keys:
+                    metric_name = key.replace('_', ' ').title()
+                    results_df[f'{metric_name} Score'] = results_df['metrics'].apply(
+                        lambda d: d.get(key, {}).get('score') if isinstance(d, dict) and d.get(key) else None
+                    )
+                    results_df[f'{metric_name} Reasoning'] = results_df['metrics'].apply(
+                        lambda d: d.get(key, {}).get('reasoning') if isinstance(d, dict) and d.get(key) else None
+                    )
+
+                # Genel skoru hesapla
+                score_cols = [f"{key.replace('_', ' ').title()} Score" for key in metric_keys]
+                overall_score_cols = [name for name in score_cols if 'Violation' not in name and 'Boundary' not in name and 'Sentiment' not in name]
+                
+                existing_overall_cols = [c for c in overall_score_cols if c in results_df.columns]
+                if existing_overall_cols:
+                    results_df['Overall Score'] = results_df[existing_overall_cols].mean(axis=1)
+                else:
+                    results_df['Overall Score'] = 0.0
+
+                # Artık ihtiyaç kalmayan orijinal 'metrics' sütununu kaldır
+                results_df = results_df.drop(columns=['metrics'])
+                st.session_state.results_df = results_df
+                st.rerun()
 
         # Her çalıştığında metrik isimlerini ve görüntülenecek sütunları al
-        metric_names = [col.replace('_', ' ').title() for col in results_df.columns if isinstance(results_df[col].iloc[0], dict) and 'score' in results_df[col].iloc[0]]
-        display_score_cols = [f'{name} Score' for name in metric_names if 'Violation' not in name and 'Boundary' not in name]
+        score_columns = [col for col in results_df.columns if col.endswith(' Score')]
+        metric_names = [col.replace(' Score', '') for col in score_columns]
+        # User Sentiment'i ortalama hesaplamasından çıkar
+        display_score_cols = [col for col in score_columns if 'Violation' not in col and 'Boundary' not in col and 'User Sentiment' not in col]
         st.session_state.metric_names = metric_names
         st.session_state.display_score_cols = display_score_cols
 
@@ -434,25 +455,45 @@ elif page == "Toplu Değerlendirme":
         
         # DataFrame boş değilse devam et
         if not results_df.empty:
-            min_val, max_val = float(results_df[score_key].min()), float(results_df[score_key].max())
+            # Önce skor sütununu sayısal değere dönüştür, hataları NaN yap
+            score_series = pd.to_numeric(results_df[score_key], errors='coerce')
             
-            # Eğer min ve max değerleri aynıysa slider'ı devre dışı bırak
-            if min_val == max_val:
-                filter_cols[3].info(f"Tek skor ({min_val:.2f}) olduğu için aralık filtresi uygulanamıyor.")
+            # NaN olmayan değerleri filtrele
+            valid_scores = score_series.dropna()
+            
+            if valid_scores.empty:
+                filter_cols[3].warning(f"'{score_filter_metric}' için filtrelenecek skor bulunamadı.")
             else:
-                score_range = filter_cols[3].slider(f"'{score_filter_metric}' Skoruna Göre Filtrele", min_value=min_val, max_value=max_val, value=(min_val, max_val))
-                results_df = results_df[results_df[score_key].between(score_range[0], score_range[1])]
+                min_val, max_val = float(valid_scores.min()), float(valid_scores.max())
+                
+                # Eğer min ve max değerleri aynıysa slider'ı devre dışı bırak
+                if min_val == max_val:
+                    filter_cols[3].info(f"Tek skor ({min_val:.2f}) olduğu için aralık filtresi uygulanamıyor.")
+                else:
+                    score_range = filter_cols[3].slider(
+                        f"'{score_filter_metric}' Skoruna Göre Filtrele", 
+                        min_value=min_val, 
+                        max_value=max_val, 
+                        value=(min_val, max_val)
+                    )
+                    # Orijinal DataFrame'i (NaN içeren) score_series kullanarak filtrele
+                    results_df = results_df[score_series.between(score_range[0], score_range[1])]
         
         st.markdown("---")
 
         if not results_df.empty:
             st.subheader("Genel Metrikler (Filtrelenmiş)")
-            score_df = results_df[display_score_cols]
-            avg_cols = st.columns(len(display_score_cols))
-            for i, col_name in enumerate(display_score_cols):
-                with avg_cols[i]:
-                    st.metric(label=f"Ort. {col_name.replace(' Score', '')}", value=f"{score_df[col_name].mean():.2f}")
-            
+            display_score_cols = st.session_state.get('display_score_cols', [])
+            if display_score_cols and all(col in results_df.columns for col in display_score_cols):
+                score_df = results_df[display_score_cols]
+                avg_cols = st.columns(len(display_score_cols))
+                for i, col_name in enumerate(display_score_cols):
+                    with avg_cols[i]:
+                        mean_val = pd.to_numeric(score_df[col_name], errors='coerce').mean()
+                        st.metric(label=f"Ort. {col_name.replace(' Score', '')}", value=f"{mean_val:.2f}")
+            else:
+                st.info("Ortalama skorları göstermek için yeterli metrik verisi bulunamadı.")
+
             # AI Analizi ve Trend
             st.markdown("---")
             

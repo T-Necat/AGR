@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Opsiyonel Ayarlar (varsayılan değerli)
     LANGCHAIN_API_KEY: Optional[str] = None
     EMBEDDING_MODEL: str = "text-embedding-3-small"
-    LLM_MODEL: str = "gpt-4.1-mini-2025-04-14"
+    LLM_MODEL: str = "gpt-4o-mini-2024-07-18"
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"
     KNOWLEDGE_BASE_FILE: str = "agent_knowledge_base.csv"
 
