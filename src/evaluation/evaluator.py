@@ -37,6 +37,15 @@ class EvaluationMetrics(BaseModel):
     conciseness: Optional[MetricEvaluation] = Field(default=None, description="Yanıtın özlülüğü.")
     user_sentiment: Optional[MetricEvaluation] = Field(default=None, description="Kullanıcı sorgusunun duygu durumu.")
 
+class OutlierAnalysis(BaseModel):
+    """Bir metrikteki aykırı (düşük) skorun nedenini analiz eden model."""
+    metric_name: str = Field(..., description="Analiz edilen metriğin adı.")
+    explanation: str = Field(..., description="Bu düşük skorun kök nedenini açıklayan, yapay zeka tarafından üretilmiş detaylı analiz.")
+
+class EvaluationResult(BaseModel):
+    """Tek bir değerlendirmenin tüm sonuçlarını kapsayan model."""
+    metrics: EvaluationMetrics
+    outlier_analyses: Optional[List[OutlierAnalysis]] = Field(default=None, description="Tespit edilen aykırı değerler için üretilen analizler.")
 
 class SentimentTurn(BaseModel):
     """Her bir kullanıcı dönüşü için duygu durumunu içeren model."""
@@ -110,10 +119,13 @@ class AgentEvaluator:
         agent_goal: str,
         rag_context: str,
         agent_persona: str,
-        tool_calls: Optional[List[dict]] = None
-    ) -> Optional[EvaluationMetrics]:
+        tool_calls: Optional[List[dict]] = None,
+        enable_outlier_analysis: bool = False,
+        outlier_threshold: float = 0.5
+    ) -> Optional[EvaluationResult]:
         """
         Bir konuşma turunu, dinamik olarak birleştirilmiş prompt'ları kullanarak değerlendirir.
+        Gerekirse aykırı değer analizi yapar.
         """
         tool_calls_str = str(tool_calls) if tool_calls else "Not used"
         logger.info(f"Tekli konuşma değerlendirmesi başlatıldı. Sorgu: '{user_query[:50]}...'")
@@ -129,7 +141,7 @@ class AgentEvaluator:
         )
         
         try:
-            evaluation = await self.async_client.chat.completions.create( # type: ignore
+            evaluation_metrics = await self.async_client.chat.completions.create( # type: ignore
                 model=self.model,
                 response_model=EvaluationMetrics,
                 messages=[
@@ -138,9 +150,101 @@ class AgentEvaluator:
                 ],
             )
             logger.info("Tekli konuşma değerlendirmesi başarıyla tamamlandı.")
-            return evaluation
+
+            result = EvaluationResult(metrics=evaluation_metrics)
+
+            if enable_outlier_analysis and evaluation_metrics:
+                outliers = await self.explain_evaluation_outliers(
+                    evaluation_results=evaluation_metrics,
+                    user_query=user_query,
+                    agent_response=agent_response,
+                    rag_context=rag_context, # Varsayılan olarak tüm context'i kullan
+                    agent_goal=agent_goal,
+                    agent_persona=agent_persona,
+                    outlier_threshold=outlier_threshold
+                )
+                result.outlier_analyses = outliers
+            
+            return result
+            
         except Exception as e:
             logger.error(f"Değerlendirme sırasında bir hata oluştu: {e}", exc_info=True)
+            return None
+
+    async def explain_evaluation_outliers(
+        self,
+        evaluation_results: EvaluationMetrics,
+        user_query: str,
+        agent_response: str,
+        rag_context: str,
+        agent_goal: str,
+        agent_persona: str,
+        outlier_threshold: float = 0.5
+    ) -> List[OutlierAnalysis]:
+        """
+        Verilen değerlendirme sonuçlarındaki düşük puanlı metrikleri (aykırı değerleri)
+        belirler ve her biri için kök neden analizi yapar.
+        """
+        outlier_tasks = []
+        for metric_name, metric_value in evaluation_results:
+            if metric_value and isinstance(metric_value, MetricEvaluation) and metric_value.score < outlier_threshold:
+                logger.info(f"'{metric_name}' metriği için aykırı değer bulundu (Skor: {metric_value.score}). Analiz başlatılıyor.")
+                task = self._analyze_single_outlier(
+                    user_query=user_query,
+                    agent_response=agent_response,
+                    rag_context=rag_context,
+                    agent_goal=agent_goal,
+                    agent_persona=agent_persona,
+                    metric_name=metric_name,
+                    metric_score=metric_value.score,
+                    metric_reasoning=metric_value.reasoning
+                )
+                outlier_tasks.append(task)
+        
+        if not outlier_tasks:
+            return []
+
+        analyses = await asyncio.gather(*outlier_tasks)
+        return [analysis for analysis in analyses if analysis]
+
+    async def _analyze_single_outlier(
+        self,
+        user_query: str,
+        agent_response: str,
+        rag_context: str,
+        agent_goal: str,
+        agent_persona: str,
+        metric_name: str,
+        metric_score: float,
+        metric_reasoning: str
+    ) -> Optional[OutlierAnalysis]:
+        """Bir metrikteki tek bir aykırı değer için yapay zeka analizi yapar."""
+        logger.debug(f"'{metric_name}' için tekil aykırı değer analizi yapılıyor.")
+        prompt_template = self._load_prompt_template(self.base_prompt_path / "evaluation" / "analyze_outlier_prompt.md")
+        prompt = prompt_template.format(
+            user_query=user_query,
+            agent_response=agent_response,
+            rag_context=rag_context,
+            agent_goal=agent_goal,
+            agent_persona=agent_persona,
+            metric_name=metric_name,
+            metric_score=metric_score,
+            metric_reasoning=metric_reasoning
+        )
+        
+        try:
+            analysis_response = await self.async_client.chat.completions.create(
+                model=self.model,
+                response_model=OutlierAnalysis,
+                messages=[
+                    {"role": "system", "content": "You are an expert AI performance analyst. Your task is to find the root cause of a low score. Your output must be a valid JSON object."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_retries=1,
+            )
+            return analysis_response
+        except Exception as e:
+            logger.error(f"'{metric_name}' metriği için aykırı değer analizi sırasında hata: {e}", exc_info=True)
             return None
 
     async def evaluate_session(

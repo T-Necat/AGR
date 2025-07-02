@@ -14,7 +14,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from src.config import get_settings
 from src.vector_db.embedding_service import AgentEmbeddingService
 from src.rag.rag_pipeline import RAGPipeline
-from src.evaluation.evaluator import AgentEvaluator, EvaluationMetrics
+from src.evaluation.evaluator import AgentEvaluator, EvaluationResult
 from src.logging_config import setup_logging
 
 # Logger'ı yapılandır
@@ -110,7 +110,7 @@ class ChatResponse(BaseModel):
     agent_response: str
     rag_context: str
     tool_calls: Optional[List[Dict]]
-    evaluation: EvaluationMetrics
+    evaluation: EvaluationResult
 
 class SystemStatusResponse(BaseModel):
     status: str
@@ -213,7 +213,9 @@ async def chat_and_evaluate(request: ChatRequest, api_key: str = Security(get_ap
             agent_goal=request.agent_goal,
             rag_context=pipeline_output["rag_context"],
             agent_persona=request.agent_persona,
-            tool_calls=tool_calls_data
+            tool_calls=tool_calls_data,
+            enable_outlier_analysis=True,
+            outlier_threshold=0.6 # 0.6'dan düşük skorları analiz et
         )
 
         if not evaluation_result:

@@ -3,6 +3,7 @@ import json
 import os
 from typing import Dict, List, Optional
 import logging
+import argparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -10,7 +11,9 @@ logger = logging.getLogger(__name__)
 class AgentDataProcessor:
     """AI Agent verilerini işleyen ve birleştiren sınıf"""
     
-    def __init__(self, data_dir: str = "ai_agent_data_june_18_25_"):
+    def __init__(self, data_dir: str):
+        if not os.path.isdir(data_dir):
+            raise FileNotFoundError(f"Veri klasörü bulunamadı: {data_dir}")
         self.data_dir = data_dir
         self.output_file = "agent_knowledge_base.csv"
         
@@ -199,6 +202,15 @@ class AgentDataProcessor:
         return output_file
 
 if __name__ == "__main__":
-    processor = AgentDataProcessor()
+    parser = argparse.ArgumentParser(description="Agent verilerini işle ve knowledge base oluştur.")
+    parser.add_argument(
+        "--data-dir", 
+        type=str, 
+        default="src/data",
+        help="İşlenecek verilerin bulunduğu klasör."
+    )
+    args = parser.parse_args()
+    
+    processor = AgentDataProcessor(data_dir=args.data_dir)
     output_file = processor.process_and_save()
     print(f"Knowledge base oluşturuldu: {output_file}") 
