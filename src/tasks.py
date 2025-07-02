@@ -3,6 +3,7 @@ import json
 import asyncio
 from celery import Task
 from io import StringIO
+import ast
 from .celery_app import celery_app
 from .evaluation.evaluator import AgentEvaluator
 from typing import Optional, List, Dict
@@ -22,7 +23,13 @@ async def _run_single_evaluation(eval_data: dict, evaluator: AgentEvaluator) -> 
         agent_persona = str(eval_data.get('persona', ''))
         
         tasks_str = str(eval_data.get('tasks', '[]'))
-        tasks = json.loads(tasks_str.replace("'", "\""))
+        try:
+            # Güvenli ayrıştırma için ast.literal_eval kullan
+            tasks = ast.literal_eval(tasks_str)
+            if not isinstance(tasks, list): tasks = []
+        except (ValueError, SyntaxError):
+            tasks = [] # Hata durumunda boş liste ata
+
         task_descriptions = [t.get('value', {}).get('about', '') for t in tasks if t.get('type') == 'talk-about']
         agent_goal = ". ".join(filter(None, task_descriptions)) or "Kullanıcıya yardımcı olmak."
         
@@ -33,7 +40,20 @@ async def _run_single_evaluation(eval_data: dict, evaluator: AgentEvaluator) -> 
             agent_goal=agent_goal, rag_context=rag_context,
             agent_persona=agent_persona, tool_calls=None
         )
-        return result.model_dump() if result else None
+        
+        if not result:
+            return None
+
+        # Orijinal verileri ve değerlendirme sonuçlarını birleştir
+        output_record = {
+            "chat_id": eval_data.get("chat_id"),
+            "agent_id": eval_data.get("agent_id"),
+            "user_query": user_query,
+            "agent_response": agent_response,
+        }
+        output_record.update(result.model_dump())
+        return output_record
+
     except Exception as e:
         logger.error(
             f"Tekli değerlendirme sırasında hata oluştu. Veri: {eval_data.get('chat_id', 'N/A')}. Hata: {e}",
@@ -55,7 +75,8 @@ def batch_evaluate_task(self: Task, batch_data_json: str) -> List[Dict]:
     """
     evaluator = AgentEvaluator()
     try:
-        batch_data = pd.read_json(batch_data_json, orient='split')
+        # FutureWarning'ü gidermek için StringIO kullan
+        batch_data = pd.read_json(StringIO(batch_data_json), orient='split')
     except Exception as e:
         logger.error("Gelen JSON veri (batch_data_json) okunamadı.", exc_info=True)
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
@@ -111,11 +132,14 @@ def evaluate_and_summarize_session_task(self: Task, session_data_json: str) -> D
         agent_persona = str(session_df['persona'].iloc[0]) if 'persona' in session_df.columns else "Tanımlanmamış"
         try:
             tasks_str = str(session_df['tasks'].iloc[0])
-            tasks = json.loads(tasks_str.replace("'", "\""))
-            task_descriptions = [t.get('value', {}).get('about', '') for t in tasks if t.get('type') == 'talk-about']
-            agent_goal = ". ".join(filter(None, task_descriptions)) or "Kullanıcıya yardımcı olmak."
-        except (json.JSONDecodeError, TypeError, IndexError):
-            agent_goal = "Kullanıcıya yardımcı olmak."
+            # Güvenli ayrıştırma için ast.literal_eval kullan
+            tasks = ast.literal_eval(tasks_str)
+            if not isinstance(tasks, list): tasks = []
+        except (ValueError, SyntaxError, IndexError):
+            tasks = [] # Hata durumunda boş liste ata
+
+        task_descriptions = [t.get('value', {}).get('about', '') for t in tasks if t.get('type') == 'talk-about']
+        agent_goal = ". ".join(filter(None, task_descriptions)) or "Kullanıcıya yardımcı olmak."
 
         # Değerlendirme ve özeti paralel olarak çalıştır
         self.update_state(state='PROGRESS', meta={'status': 'Değerlendirme ve özetleme çalışıyor...'})

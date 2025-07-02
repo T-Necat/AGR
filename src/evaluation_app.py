@@ -321,30 +321,35 @@ elif page == "Toplu Değerlendirme":
 
     uploaded_file = st.file_uploader("Sohbet (.csv) dosyasını seçin", type="csv")
 
+    if 'results_df' not in st.session_state:
+        st.session_state.results_df = pd.DataFrame()
+
     if uploaded_file is not None:
-        try:
-            uploaded_chats_df = pd.read_csv(uploaded_file)
-            data_path = "src/data"
-            personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
-            tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
-            batch_data = process_chat_data(uploaded_chats_df, personas_df, tasks_df)
+        if st.button("Veriyi İşle ve Analize Hazırla", key="process_data"):
+            try:
+                uploaded_chats_df = pd.read_csv(uploaded_file, engine='python', on_bad_lines='warn')
+                data_path = "src/data"
+                personas_df = pd.read_csv(os.path.join(data_path, "ai_agent_persona_june_18_25.csv"))
+                tasks_df = pd.read_csv(os.path.join(data_path, "ai_agent_tasks_june_18_25.csv"))
+                
+                with st.spinner("Veri işleniyor..."):
+                    processed_data = process_chat_data(uploaded_chats_df, personas_df, tasks_df)
+                
+                st.session_state.processed_data = processed_data
+                st.success(f"Yüklenen dosyadan değerlendirilmeye hazır {len(processed_data)} konuşma bulundu.")
+                
+            except Exception as e:
+                st.error(f"Dosya işlenirken bir hata oluştu: {e}")
 
-            st.info(f"Yüklenen dosyadan değerlendirilmeye hazır {len(batch_data)} konuşma bulundu.")
+    if 'processed_data' in st.session_state and not st.session_state.processed_data.empty:
+        processed_data = st.session_state.processed_data
+        
+        if st.button(f"📚 {len(processed_data)} Konuşmayı Arka Planda Değerlendir", key="eval_batch_async", use_container_width=True, type="primary"):
+            batch_data_json = processed_data.to_json(orient='split')
+            task = batch_evaluate_task.delay(batch_data_json)
+            st.session_state['batch_task_id'] = task.id
+            st.success(f"Toplu değerlendirme görevi başlatıldı! Görev ID: {task.id}")
 
-            if st.button(f"📚 {len(batch_data)} Konuşmayı Arka Planda Değerlendir", key="eval_batch_async", use_container_width=True, type="primary"):
-                if not batch_data.empty:
-                    # DataFrame'i Celery'ye göndermek için JSON'a çevir
-                    batch_data_json = batch_data.to_json(orient='split')
-                    task = batch_evaluate_task.delay(batch_data_json)
-                    st.session_state['batch_task_id'] = task.id
-                    st.success(f"Toplu değerlendirme görevi başlatıldı! Görev ID: {task.id}")
-                    st.info("İlerleme durumu aşağıda gösterilecektir. Bu sırada başka sayfalara gidebilirsiniz.")
-                else:
-                    st.warning("İşlenecek geçerli bir konuşma bulunamadı.")
-        except Exception as e:
-            st.error(f"Dosya işlenirken veya görev başlatılırken bir hata oluştu: {e}")
-
-    # --- Görev Durumunu Kontrol Etme ve Sonuçları Gösterme ---
     if 'batch_task_id' in st.session_state:
         task_id = st.session_state['batch_task_id']
         task_result = AsyncResult(task_id, app=celery_app)
@@ -356,44 +361,167 @@ elif page == "Toplu Değerlendirme":
             if task_result.successful():
                 st.success(f"Görev (ID: {task_id}) başarıyla tamamlandı!")
                 results = task_result.get()
-                results_df = pd.DataFrame(results)
-
-                # Sonuçları metrik sütunlarına ayır
-                for metric in ["goal_adherence", "answer_relevance", "groundedness", "persona_compliance", "style_and_courtesy", "conciseness", "knowledge_boundary_violation", "security_policy_violation"]:
-                    if metric in results_df.columns and not results_df.empty:
-                        results_df[f'{metric}_score'] = results_df[metric].apply(lambda x: x['score'] if isinstance(x, dict) else None)
-                        results_df[f'{metric}_reasoning'] = results_df[metric].apply(lambda x: x['reasoning'] if isinstance(x, dict) else None)
                 
-                # Genel istatistikleri göster
-                st.subheader("Genel Metrikler")
-                if not results_df.empty:
-                    avg_cols = st.columns(4)
-                    avg_cols[0].metric("Toplam Değerlendirme", len(results_df))
-                    avg_cols[1].metric("Ort. Groundedness", f"{results_df['groundedness_score'].mean():.2f}")
-                    avg_cols[2].metric("Ort. Relevance", f"{results_df['answer_relevance_score'].mean():.2f}")
-                    avg_cols[3].metric("Ort. Style", f"{results_df['style_and_courtesy_score'].mean():.2f}")
+                if not results:
+                    st.warning("Değerlendirme görevi çalıştı ancak hiçbir sonuç üretmedi.")
+                else:
+                    results_df = pd.DataFrame(results)
+                    st.session_state.results_df = results_df # Sonuçları state'e kaydet
                 
-                # Detaylı sonuçları göster
-                with st.expander("Tüm Değerlendirme Sonuçlarını Gör"):
-                    st.dataframe(results_df)
-
-                # Sonuçları gösterdikten sonra task id'yi temizle
-                del st.session_state['batch_task_id']
+                if 'batch_task_id' in st.session_state:
+                    del st.session_state['batch_task_id']
+                if 'processed_data' in st.session_state:
+                    del st.session_state['processed_data'] # İşlenmiş veriyi temizle
+                st.rerun() # Sayfayı yeniden çalıştırarak sonuçları göster
             else:
                 st.error(f"Görev (ID: {task_id}) bir hatayla sonuçlandı: {task_result.info}")
-                del st.session_state['batch_task_id']
+                if 'batch_task_id' in st.session_state:
+                    del st.session_state['batch_task_id']
         else:
-            # Görev hala çalışıyor, ilerlemeyi göster
             progress_meta = task_result.info or {'current': 0, 'total': 1}
-            current = progress_meta.get('current', 0)
-            total = progress_meta.get('total', 1)
-            
+            current, total = progress_meta.get('current', 0), progress_meta.get('total', 1)
             progress_percent = (current / total) if total > 0 else 0
             st.progress(progress_percent, text=f"Değerlendiriliyor... ({current}/{total})")
-            
-            # Sayfanın periyodik olarak yenilenmesini tetikle
             time.sleep(5)
             st.rerun()
+
+    if not st.session_state.results_df.empty:
+        results_df = st.session_state.results_df.copy()
+        
+        # Sadece bir kere metrik sütunlarını oluştur
+        if 'Overall Score' not in results_df.columns:
+            metric_names = []
+            for col in results_df.columns:
+                if isinstance(results_df[col].iloc[0], dict) and 'score' in results_df[col].iloc[0]:
+                    metric_name = col.replace('_', ' ').title()
+                    if metric_name not in metric_names:
+                        metric_names.append(metric_name)
+                    results_df[f'{metric_name} Score'] = results_df[col].apply(lambda x: x.get('score') if isinstance(x, dict) else None)
+                    results_df[f'{metric_name} Reasoning'] = results_df[col].apply(lambda x: x.get('reasoning') if isinstance(x, dict) else None)
+            
+            score_cols = [f'{name} Score' for name in metric_names if 'Violation' not in name and 'Boundary' not in name]
+            results_df['Overall Score'] = results_df[score_cols].mean(axis=1)
+            st.session_state.results_df = results_df # Güncellenmiş df'i kaydet
+            st.session_state.metric_names = metric_names
+            st.session_state.score_cols = score_cols
+
+        metric_names = st.session_state.metric_names
+        score_cols = st.session_state.score_cols
+
+        st.subheader("Filtreleme ve Sıralama")
+        filter_cols = st.columns([2, 2, 3, 3])
+        
+        # Filtreleri uygula
+        agent_ids = ['Tümü'] + sorted(list(results_df['agent_id'].unique()))
+        selected_agent = filter_cols[0].selectbox("Agent ID'ye Göre Filtrele", agent_ids)
+        if selected_agent != 'Tümü':
+            results_df = results_df[results_df['agent_id'] == selected_agent]
+
+        sort_by = filter_cols[1].selectbox("Sırala", ["Overall Score"] + sorted(metric_names))
+        sort_ascending = filter_cols[1].toggle("Artan", False)
+        sort_key = f"{sort_by} Score" if sort_by != "Overall Score" else sort_by
+        results_df = results_df.sort_values(by=sort_key, ascending=sort_ascending)
+
+        score_filter_metric = filter_cols[2].selectbox("Skor Filtre Metriği", ["Overall Score"] + sorted(metric_names))
+        score_key = f"{score_filter_metric} Score" if score_filter_metric != "Overall Score" else score_filter_metric
+        
+        # DataFrame boş değilse devam et
+        if not results_df.empty:
+            min_val, max_val = float(results_df[score_key].min()), float(results_df[score_key].max())
+            
+            # Eğer min ve max değerleri aynıysa slider'ı devre dışı bırak
+            if min_val == max_val:
+                filter_cols[3].info(f"Tek skor ({min_val:.2f}) olduğu için aralık filtresi uygulanamıyor.")
+            else:
+                score_range = filter_cols[3].slider(f"'{score_filter_metric}' Skoruna Göre Filtrele", min_value=min_val, max_value=max_val, value=(min_val, max_val))
+                results_df = results_df[results_df[score_key].between(score_range[0], score_range[1])]
+        
+        st.markdown("---")
+
+        if not results_df.empty:
+            st.subheader("Genel Metrikler (Filtrelenmiş)")
+            score_df = results_df[score_cols]
+            avg_cols = st.columns(len(score_cols))
+            for i, col_name in enumerate(score_cols):
+                with avg_cols[i]:
+                    st.metric(label=f"Ort. {col_name.replace(' Score', '')}", value=f"{score_df[col_name].mean():.2f}")
+            
+            # AI Analizi
+            with st.expander("🤖 AI Analizi ve Öneriler"):
+                if st.button("Analiz Oluştur", key="generate_analysis"):
+                    if evaluator:
+                        with st.spinner("AI Analisti sonuçları inceliyor..."):
+                            stats_df = results_df[score_cols]
+                            stats = stats_df.agg(['mean', 'std', 'min', 'max']).to_dict()
+                            stats['total_conversations'] = len(results_df)
+                            
+                            # `n` ve `columns` parametrelerini doğru kullan
+                            low_df = results_df.nsmallest(n=3, columns='Overall Score')
+                            high_df = results_df.nlargest(n=3, columns='Overall Score')
+
+                            def format_examples(df, title):
+                                formatted_str = f"--- {title} ---\n"
+                                for _, r in df.iterrows():
+                                    formatted_str += f"Chat ID: {r.get('chat_id', 'N/A')}\n"
+                                    formatted_str += f"Overall Score: {r.get('Overall Score', 0):.2f}\n"
+                                    formatted_str += f"Query: {r.get('user_query', 'N/A')}\n"
+                                    formatted_str += f"Response: {r.get('agent_response', 'N/A')}\n\n"
+                                return formatted_str
+
+                            analysis = asyncio.run(evaluator.analyze_batch_results(
+                                stats_json=json.dumps(stats, indent=2),
+                                low_score_examples_str=format_examples(low_df, "Low-Scoring Conversations"),
+                                high_score_examples_str=format_examples(high_df, "High-Scoring Conversations")
+                            ))
+                            st.session_state.ai_analysis = analysis
+                    else:
+                        st.warning("Analiz oluşturmak için Değerlendirici servisi (Evaluator) başlatılamadı.")
+
+                if 'ai_analysis' in st.session_state:
+                    st.markdown(st.session_state.ai_analysis)
+
+            st.markdown("---")
+            st.subheader(f"Değerlendirme Sonuçları ({len(results_df)} adet)")
+
+            # Paginasyon
+            if 'page' not in st.session_state: st.session_state.page = 0
+            items_per_page = 10
+            start_idx = st.session_state.page * items_per_page
+            end_idx = start_idx + items_per_page
+            paginated_df = results_df.iloc[start_idx:end_idx]
+
+            for _, row in paginated_df.iterrows():
+                st.markdown(f"**Chat ID:** `{row.get('chat_id', 'N/A')}` | **Genel Skor:** `{row.get('Overall Score', 0):.2f}`")
+                with st.expander("Detayları ve Gerekçeleri Gör"):
+                     st.markdown(f"**Kullanıcı Sorusu:** *{row.get('user_query', 'N/A')}*")
+                     st.markdown(f"**Agent Cevabı:** *{row.get('agent_response', 'N/A')}*")
+                     st.divider()
+                     metric_cols = st.columns(len(metric_names))
+                     for i, name in enumerate(metric_names):
+                         with metric_cols[i]:
+                             score = row.get(f"{name} Score")
+                             is_violation = "Violation" in name or "Boundary" in name
+                             # Hata düzeltmesi: score'un None olup olmadığını kontrol et
+                             delta_color = "inverse" if is_violation and score is not None and score > 0 else "normal"
+                             st.metric(label=name, value=f"{score:.2f}" if score is not None else "N/A", delta_color=delta_color)
+                     
+                     st.divider()
+                     st.markdown("**Tüm Metrik Gerekçeleri:**")
+                     for name in metric_names:
+                         reasoning = row.get(f"{name} Reasoning", "Gerekçe bulunamadı.")
+                         st.markdown(f"- **{name}:** {reasoning}")
+                
+            page_cols = st.columns([1, 1, 1])
+            if st.session_state.page > 0:
+                if page_cols[0].button("⬅️ Önceki Sayfa", use_container_width=True):
+                    st.session_state.page -= 1
+                    st.rerun()
+            if end_idx < len(results_df):
+                if page_cols[2].button("Sonraki Sayfa ➡️", use_container_width=True):
+                    st.session_state.page += 1
+                    st.rerun()
+        else:
+            st.info("Filtre kriterlerine uygun sonuç bulunamadı.")
 
 # --- Sayfa 3: Oturum Değerlendirme ---
 elif page == "Oturum Analizi":
@@ -467,12 +595,16 @@ elif page == "Oturum Analizi":
                         del st.session_state['session_task_id']
                 else:
                     # Görev hala çalışıyor, ilerlemeyi göster
-                    progress_meta = task_result.info or {}
-                    status = progress_meta.get('status', 'Başlatılıyor...')
-                    st.info(f"Görev durumu: {status}")
-                    with st.spinner("Sonuçlar bekleniyor... Sayfa 3 saniye içinde yenilenecektir."):
-                        time.sleep(3)
-                        st.rerun()
+                    progress_meta = task_result.info or {'current': 0, 'total': 1}
+                    current = progress_meta.get('current', 0)
+                    total = progress_meta.get('total', 1)
+                    
+                    progress_percent = (current / total) if total > 0 else 0
+                    st.progress(progress_percent, text=f"Değerlendiriliyor... ({current}/{total})")
+                    
+                    # Sayfanın periyodik olarak yenilenmesini tetikle
+                    time.sleep(5)
+                    st.rerun()
                 
     else:
         st.error("Varsayılan veri yüklenemedi.") 

@@ -196,6 +196,37 @@ class AgentEvaluator:
             logger.error(f"Oturum özeti oluşturulurken bir hata oluştu: {e}", exc_info=True)
             return "Özet oluşturulurken bir hata meydana geldi."
 
+    async def analyze_batch_results(
+        self,
+        stats_json: str,
+        low_score_examples_str: str,
+        high_score_examples_str: str
+    ) -> str:
+        """
+        Değerlendirme sonuçlarını yapay zeka ile analiz edip bir rapor oluşturur.
+        """
+        logger.info("Toplu değerlendirme sonuçları için AI analizi başlatıldı.")
+        prompt_template = self._load_prompt_template(self.base_prompt_path / "summarization" / "summarize_batch_results_prompt.md")
+        prompt = prompt_template.format(
+            stats_json=stats_json,
+            low_score_examples_str=low_score_examples_str,
+            high_score_examples_str=high_score_examples_str
+        )
+        
+        try:
+            response = await self.async_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+            )
+            analysis = response.choices[0].message.content or "Analiz oluşturulamadı."
+            logger.info("AI analizi başarıyla tamamlandı.")
+            return analysis.strip()
+        except Exception as e:
+            logger.error(f"Toplu sonuç analizi sırasında bir hata oluştu: {e}", exc_info=True)
+            return "Sonuçlar analiz edilirken bir hata meydana geldi."
+
+
 # Örnek kullanım (test için)
 async def main_async():
     # Bu bölüm artık eski prompt yapısını yansıtıyor. Yeni yapı test edilmeli.

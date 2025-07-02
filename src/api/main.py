@@ -60,7 +60,7 @@ async def central_error_handling_middleware(request: Request, call_next):
 
 # Rate Limiting Middleware'i ekle
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 
 # CORS ayarları
 app.add_middleware(
@@ -191,6 +191,9 @@ async def chat_and_evaluate(request: ChatRequest, api_key: str = Security(get_ap
     """
     if not all([rag_pipeline, evaluator]):
         raise HTTPException(status_code=503, detail="Bir veya daha fazla servis kullanılamıyor. Lütfen logları kontrol edin.")
+    
+    assert rag_pipeline is not None
+    assert evaluator is not None
     
     try:
         # 1. RAG pipeline'ı çalıştırarak yanıt üret
