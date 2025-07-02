@@ -6,12 +6,15 @@ Bu proje, yapay zeka ajanlarının performansını ölçmek, analiz etmek ve kul
 
 ## ✨ Ana Özellikler
 
-- **LLM-as-a-Judge Değerlendirmesi:** Agent konuşmalarını; hedefe uygunluk, doğruluk, üslup ve güvenlik gibi çok boyutlu kriterlere göre değerlendirir.
+- **Çok Boyutlu Değerlendirme:** Agent konuşmalarını; hedefe uygunluk, doğruluk, üslup, güvenlik ve **kullanıcı duygu durumu** gibi çok boyutlu kriterlere göre `LLM-as-a-Judge` yaklaşımıyla değerlendirir.
+- **Gelişmiş Veri Görselleştirme:**
+    - **Toplu Değerlendirme:** Metrik ortalamaları ve skor dağılımlarını gösteren **interaktif grafikler**.
+    - **Oturum Analizi:** Konuşma boyunca kullanıcı duygu durumunun değişimini gösteren **trend grafikleri**.
 - **Asenkron Görev Yönetimi:** `Celery` ve `Redis` kullanarak, uzun süren toplu değerlendirme ve oturum analizi işlemlerini arayüzü kilitlemeden arka planda çalıştırır.
 - **Etkileşimli Arayüz:** `Streamlit` ile geliştirilmiş kullanıcı dostu bir panel üzerinden:
     - **Sandbox:** Manuel senaryoları anında test etme.
-    - **Toplu Değerlendirme:** Yüzlerce konuşmayı tek seferde, CSV dosyası yükleyerek değerlendirme.
-    - **Oturum Analizi:** Tekil sohbet oturumlarını derinlemesine analiz etme ve otomatik özet çıkarma.
+    - **Toplu Değerlendirme:** Yüzlerce konuşmayı CSV dosyası yükleyerek otomatik olarak değerlendirme, analiz etme ve **görselleştirme**.
+    - **Oturum Analizi:** Tekil sohbet oturumlarını derinlemesine analiz etme, otomatik özet çıkarma ve **duygu trendini inceleme**.
 - **RAG Tabanlı Agent Tavsiyesi:** `FastAPI` ile sunulan bir endpoint, kullanıcı sorgusunu analiz ederek vektör veritabanından en uygun agent'ı bulur ve tavsiye eder.
 - **Test ve Otomasyon:** Kapsamlı `pytest` testleri ve tüm sistemi tek komutla başlatan bir otomasyon script'i içerir.
 

@@ -12,7 +12,10 @@ import openai
 
 logger = logging.getLogger(__name__)
 
-async def _run_single_evaluation(eval_data: dict, evaluator: AgentEvaluator) -> Optional[dict]:
+# Her bir worker işlemi için tek bir evaluator nesnesi oluşturarak kaynakları verimli kullan
+evaluator = AgentEvaluator()
+
+async def _run_single_evaluation(eval_data: dict, current_evaluator: AgentEvaluator) -> Optional[dict]:
     """
     Tek bir satır veri için değerlendirmeyi asenkron olarak çalıştıran yardımcı fonksiyon.
     Hata durumunda loglar ve None döner.
@@ -35,7 +38,7 @@ async def _run_single_evaluation(eval_data: dict, evaluator: AgentEvaluator) -> 
         
         rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{agent_response}'"
 
-        result = await evaluator.evaluate_conversation(
+        result = await current_evaluator.evaluate_conversation(
             user_query=user_query, agent_response=agent_response,
             agent_goal=agent_goal, rag_context=rag_context,
             agent_persona=agent_persona, tool_calls=None
@@ -73,7 +76,6 @@ def batch_evaluate_task(self: Task, batch_data_json: str) -> List[Dict]:
     Celery arka plan görevi. Bir grup konuşmayı asenkron ve paralel olarak değerlendirir.
     Geçici API hatalarında otomatik olarak yeniden dener.
     """
-    evaluator = AgentEvaluator()
     try:
         # FutureWarning'ü gidermek için StringIO kullan
         batch_data = pd.read_json(StringIO(batch_data_json), orient='split')
@@ -113,7 +115,6 @@ def evaluate_and_summarize_session_task(self: Task, session_data_json: str) -> D
     """
     Celery arka plan görevi. Tek bir oturumu değerlendirir ve özetler.
     """
-    evaluator = AgentEvaluator()
     try:
         session_df = pd.read_json(StringIO(session_data_json), orient='split')
         if session_df.empty:
@@ -145,10 +146,11 @@ def evaluate_and_summarize_session_task(self: Task, session_data_json: str) -> D
         self.update_state(state='PROGRESS', meta={'status': 'Değerlendirme ve özetleme çalışıyor...'})
         eval_task = evaluator.evaluate_session(full_conversation, agent_goal, agent_persona)
         summary_task = evaluator.summarize_session(full_conversation)
+        sentiment_trend_task = evaluator.analyze_sentiment_per_turn(full_conversation)
         
-        results = await asyncio.gather(eval_task, summary_task, return_exceptions=True)
+        results = await asyncio.gather(eval_task, summary_task, sentiment_trend_task, return_exceptions=True)
         
-        evaluation_result, summary_result = results
+        evaluation_result, summary_result, sentiment_trend_result = results
 
         final_result = {}
         if isinstance(evaluation_result, Exception):
@@ -164,6 +166,12 @@ def evaluate_and_summarize_session_task(self: Task, session_data_json: str) -> D
             logger.error(f"Oturum özetleme hatası: {summary_result}")
         else:
             final_result['summary'] = summary_result
+        
+        if isinstance(sentiment_trend_result, Exception):
+            final_result['sentiment_trend'] = None
+            logger.error(f"Oturum içi duygu trendi analizi hatası: {sentiment_trend_result}")
+        else:
+            final_result['sentiment_trend'] = sentiment_trend_result
             
         return final_result
 

@@ -23,18 +23,26 @@ class MetricEvaluation(BaseModel):
 
 class EvaluationMetrics(BaseModel):
     """
-    Bu model, bir agent yanıtının belirtilen kriterlere göre değerlendirme sonuçlarını içerir.
-    Her bir metrik, bir puan ve o puanın gerekçesini içerir.
+    Bu model, bir agent yanıtının ve ilgili kullanıcı sorgusunun belirtilen kriterlere göre 
+    değerlendirme sonuçlarını içerir.
     """
-    goal_adherence: MetricEvaluation = Field(..., description="Agent'ın ana görevine sadakati.")
-    groundedness: MetricEvaluation = Field(..., description="Yanıtın sağlanan bilgiye dayanması.")
-    answer_relevance: MetricEvaluation = Field(..., description="Yanıtın kullanıcı sorusuna uygunluğu.")
-    persona_compliance: MetricEvaluation = Field(..., description="Agent'ın tanımlanan personaya uyumu.")
-    tool_accuracy: MetricEvaluation = Field(..., description="Araç kullanımının doğruluğu.")
-    knowledge_boundary_violation: MetricEvaluation = Field(..., description="Bilgi sınırlarının ihlali.")
-    security_policy_violation: MetricEvaluation = Field(..., description="Güvenlik politikası ihlali.")
-    style_and_courtesy: MetricEvaluation = Field(..., description="Üslup ve nezaket.")
-    conciseness: MetricEvaluation = Field(..., description="Yanıtın özlülüğü.")
+    goal_adherence: Optional[MetricEvaluation] = Field(default=None, description="Agent'ın ana görevine sadakati.")
+    groundedness: Optional[MetricEvaluation] = Field(default=None, description="Yanıtın sağlanan bilgiye dayanması.")
+    answer_relevance: Optional[MetricEvaluation] = Field(default=None, description="Yanıtın kullanıcı sorusuna uygunluğu.")
+    persona_compliance: Optional[MetricEvaluation] = Field(default=None, description="Agent'ın tanımlanan personaya uyumu.")
+    tool_accuracy: Optional[MetricEvaluation] = Field(default=None, description="Araç kullanımının doğruluğu.")
+    knowledge_boundary_violation: Optional[MetricEvaluation] = Field(default=None, description="Bilgi sınırlarının ihlali.")
+    security_policy_violation: Optional[MetricEvaluation] = Field(default=None, description="Güvenlik politikası ihlali.")
+    style_and_courtesy: Optional[MetricEvaluation] = Field(default=None, description="Üslup ve nezaket.")
+    conciseness: Optional[MetricEvaluation] = Field(default=None, description="Yanıtın özlülüğü.")
+    user_sentiment: Optional[MetricEvaluation] = Field(default=None, description="Kullanıcı sorgusunun duygu durumu.")
+
+
+class SentimentTurn(BaseModel):
+    """Her bir kullanıcı dönüşü için duygu durumunu içeren model."""
+    turn: int = Field(..., description="Konuşmadaki kullanıcı dönüşünün sırası (1'den başlayarak).")
+    sentiment_score: float = Field(..., description="Kullanıcının bu dönüşteki duygu puanı (-1.0 ile 1.0 arasında).")
+    reasoning: str = Field(..., description="Bu puanın neden verildiğini açıklayan kısa ve net bir gerekçe.")
 
 
 class AgentEvaluator:
@@ -67,26 +75,31 @@ class AgentEvaluator:
 
     def _assemble_evaluation_prompt(self, main_prompt_name: str, **kwargs) -> str:
         """
-        Tüm metrik prompt'larını okur, birleştirir ve ana prompt şablonuna enjekte eder.
+        Tüm metrik prompt'larını okur, ilgili bölümlere ayırır ve ana prompt şablonuna enjekte eder.
         """
-        # 1. Ana (orkestratör) prompt şablonunu yükle
         main_template_path = self.base_prompt_path / "evaluation" / f"{main_prompt_name}.md"
         main_template = self._load_prompt_template(main_template_path)
 
-        # 2. Tüm metrik dosyalarını birleştir
-        metrics_dir = self.base_prompt_path / "evaluation" / "metrics"
-        metric_files = sorted(metrics_dir.glob("*.md"))
+        # Agent yanıtını değerlendiren metrikleri topla
+        agent_metrics_dir = self.base_prompt_path / "evaluation" / "metrics"
+        agent_criteria_parts = []
+        # user_sentiment.md hariç tüm metrikleri al
+        for metric_file in sorted(agent_metrics_dir.glob("*.md")):
+            if "user_sentiment" not in metric_file.name:
+                agent_criteria_parts.append(self._load_prompt_template(metric_file))
         
-        criteria_parts = []
-        for metric_file in metric_files:
-            criteria_parts.append(self._load_prompt_template(metric_file))
-        
-        criteria_section = "\n\n".join(criteria_parts)
+        agent_criteria_section = "\n\n".join(agent_criteria_parts)
 
-        # 3. Ana şablonu ve metrikler bölümünü formatla
-        # Önce metrikler bölümü, sonra tüm prompt
-        formatted_criteria = criteria_section.format(**kwargs)
-        final_prompt = main_template.format(criteria_section=formatted_criteria, **kwargs)
+        # Kullanıcı sorgusunu değerlendiren metrikleri topla
+        user_sentiment_prompt_path = agent_metrics_dir / "user_sentiment.md"
+        user_criteria_section = self._load_prompt_template(user_sentiment_prompt_path)
+        
+        # Ana şablonu ve metrikler bölümünü formatla
+        final_prompt = main_template.format(
+            agent_criteria_section=agent_criteria_section.format(**kwargs),
+            user_criteria_section=user_criteria_section.format(**kwargs),
+            **kwargs
+        )
         
         return final_prompt
 
@@ -142,17 +155,28 @@ class AgentEvaluator:
         conversation_str = "\n".join([f"- {msg['role']}: {msg['content']}" for msg in full_conversation])
         logger.info(f"Oturum değerlendirmesi başlatıldı. Oturumda {len(full_conversation)} mesaj var.")
 
-        # Bu metrikler oturum genelinde relevant olmayabilir, default değerler atıyoruz.
-        prompt = self._assemble_evaluation_prompt(
-            main_prompt_name="evaluate_session_prompt",
+        main_template = self._load_prompt_template(self.base_prompt_path / "evaluation" / "evaluate_session_prompt.md")
+
+        # Oturum değerlendirmesi için relevant olan metrikleri topla
+        metrics_dir = self.base_prompt_path / "evaluation" / "metrics"
+        criteria_parts = []
+        # user_sentiment hariç, oturum genelinde anlamlı olan metrikleri seç
+        session_relevant_metrics = [
+            "goal_adherence.md", "persona_compliance.md", 
+            "style_and_courtesy.md", "conciseness.md",
+            "knowledge_boundary_violation.md", "security_policy_violation.md",
+            "user_sentiment.md"
+        ]
+        for metric_name in session_relevant_metrics:
+            criteria_parts.append(self._load_prompt_template(metrics_dir / metric_name))
+        
+        criteria_section = "\n\n".join(criteria_parts)
+
+        prompt = main_template.format(
+            conversation_str=conversation_str,
             agent_goal=agent_goal,
             agent_persona=agent_persona,
-            conversation_str=conversation_str,
-            # Session prompt'unda bulunmayan metrikler için boş değerler
-            rag_context="N/A for session evaluation",
-            user_query="N/A for session evaluation",
-            tool_calls_str="N/A for session evaluation",
-            agent_response="N/A for session evaluation"
+            criteria_section=criteria_section
         )
 
         try:
@@ -160,10 +184,11 @@ class AgentEvaluator:
                 model=self.model,
                 response_model=EvaluationMetrics,
                 messages=[
-                    {"role": "system", "content": "You are a fair and objective AI agent session evaluator. Your output must be a valid JSON object matching the requested Pydantic model."},
+                    {"role": "system", "content": "You are a fair and objective AI agent session evaluator. Your output must be a valid JSON object matching the requested Pydantic model. Fill in any metrics not directly evaluated with a default score of 0.0 and 'N/A' for reasoning."},
                     {"role": "user", "content": prompt}
                 ],
             )
+            
             logger.info("Oturum değerlendirmesi başarıyla tamamlandı.")
             return evaluation
         except Exception as e:
@@ -225,6 +250,65 @@ class AgentEvaluator:
         except Exception as e:
             logger.error(f"Toplu sonuç analizi sırasında bir hata oluştu: {e}", exc_info=True)
             return "Sonuçlar analiz edilirken bir hata meydana geldi."
+
+    async def analyze_sentiment_trend(self, stats_json: str, sentiment_trend_data_str: str) -> str:
+        """
+        Verilen duygu verileri üzerinden bir trend analizi raporu oluşturur.
+        """
+        logger.info("Duygu trend analizi başlatıldı.")
+        prompt_template = self._load_prompt_template(self.base_prompt_path / "summarization" / "analyze_sentiment_trend_prompt.md")
+        prompt = prompt_template.format(
+            stats_json=stats_json,
+            sentiment_trend_data_str=sentiment_trend_data_str
+        )
+        
+        try:
+            response = await self.async_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+            )
+            analysis = response.choices[0].message.content or "Trend analizi oluşturulamadı."
+            logger.info("Duygu trend analizi başarıyla tamamlandı.")
+            return analysis.strip()
+        except Exception as e:
+            logger.error(f"Duygu trend analizi sırasında bir hata oluştu: {e}", exc_info=True)
+            return "Trend analizi oluşturulurken bir hata meydana geldi."
+
+    async def analyze_sentiment_per_turn(self, full_conversation: List[Dict[str, str]]) -> List[Dict]:
+        """
+        Bir konuşmadaki her bir kullanıcı mesajının duygu durumunu ayrı ayrı analiz eder.
+        """
+        logger.info(f"Konuşma içi duygu analizi başlatıldı. Toplam {len(full_conversation)} mesaj var.")
+        
+        prompt_template = self._load_prompt_template(self.base_prompt_path / "summarization" / "analyze_sentiment_per_turn_prompt.md")
+        
+        user_turns = [(i, msg['content']) for i, msg in enumerate(full_conversation) if msg['role'] == 'user']
+        
+        tasks = []
+        for i, (turn_idx, content) in enumerate(user_turns):
+            prompt = prompt_template.format(turn_number=i + 1, user_query=content)
+            task = self.async_client.chat.completions.create( # type: ignore
+                model=self.model,
+                response_model=SentimentTurn,
+                messages=[
+                    {"role": "system", "content": "You are an expert sentiment analyst. Your output must be a valid JSON object matching the requested Pydantic model."},
+                    {"role": "user", "content": prompt}
+                ],
+            )
+            tasks.append(task)
+            
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        processed_results = []
+        for res in results:
+            if isinstance(res, Exception):
+                logger.error(f"Konuşma içi duygu analizi sırasında bir alt görevde hata: {res}")
+            elif isinstance(res, SentimentTurn):
+                processed_results.append(res.model_dump())
+
+        logger.info(f"{len(processed_results)} adet kullanıcı dönüşü için duygu analizi tamamlandı.")
+        return processed_results
 
 
 # Örnek kullanım (test için)

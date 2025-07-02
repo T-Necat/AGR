@@ -9,6 +9,7 @@ from streamlit_option_menu import option_menu
 import datetime
 from celery.result import AsyncResult
 import asyncio
+import numpy as np
 
 # Proje kök dizinini sisteme tanıtarak diğer modülleri import et
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -179,6 +180,7 @@ def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
         "Conciseness": getattr(evaluation_result, 'conciseness', None),
         "Knowledge Boundary": evaluation_result.knowledge_boundary_violation,
         "Security/Policy": evaluation_result.security_policy_violation,
+        "User Sentiment": getattr(evaluation_result, 'user_sentiment', None),
     }
     
     col_idx = 0
@@ -325,7 +327,8 @@ elif page == "Toplu Değerlendirme":
         st.session_state.results_df = pd.DataFrame()
 
     if uploaded_file is not None:
-        if st.button("Veriyi İşle ve Analize Hazırla", key="process_data"):
+        # Dosyanın daha önce işlenip işlenmediğini kontrol et
+        if 'processed_file_name' not in st.session_state or st.session_state.processed_file_name != uploaded_file.name:
             try:
                 uploaded_chats_df = pd.read_csv(uploaded_file, engine='python', on_bad_lines='warn')
                 data_path = "src/data"
@@ -335,8 +338,11 @@ elif page == "Toplu Değerlendirme":
                 with st.spinner("Veri işleniyor..."):
                     processed_data = process_chat_data(uploaded_chats_df, personas_df, tasks_df)
                 
+                # İşlenen veriyi ve dosya adını session state'e kaydet
                 st.session_state.processed_data = processed_data
+                st.session_state.processed_file_name = uploaded_file.name
                 st.success(f"Yüklenen dosyadan değerlendirilmeye hazır {len(processed_data)} konuşma bulundu.")
+                st.rerun() # Arayüzü güncelleyerek değerlendirme butonunu göster
                 
             except Exception as e:
                 st.error(f"Dosya işlenirken bir hata oluştu: {e}")
@@ -390,23 +396,24 @@ elif page == "Toplu Değerlendirme":
         
         # Sadece bir kere metrik sütunlarını oluştur
         if 'Overall Score' not in results_df.columns:
-            metric_names = []
+            metric_names_init = []
             for col in results_df.columns:
                 if isinstance(results_df[col].iloc[0], dict) and 'score' in results_df[col].iloc[0]:
                     metric_name = col.replace('_', ' ').title()
-                    if metric_name not in metric_names:
-                        metric_names.append(metric_name)
+                    if metric_name not in metric_names_init:
+                        metric_names_init.append(metric_name)
                     results_df[f'{metric_name} Score'] = results_df[col].apply(lambda x: x.get('score') if isinstance(x, dict) else None)
                     results_df[f'{metric_name} Reasoning'] = results_df[col].apply(lambda x: x.get('reasoning') if isinstance(x, dict) else None)
             
-            score_cols = [f'{name} Score' for name in metric_names if 'Violation' not in name and 'Boundary' not in name]
-            results_df['Overall Score'] = results_df[score_cols].mean(axis=1)
-            st.session_state.results_df = results_df # Güncellenmiş df'i kaydet
-            st.session_state.metric_names = metric_names
-            st.session_state.score_cols = score_cols
+            overall_score_cols = [f'{name} Score' for name in metric_names_init if 'Violation' not in name and 'Boundary' not in name and 'Sentiment' not in name]
+            results_df['Overall Score'] = results_df[overall_score_cols].mean(axis=1)
+            st.session_state.results_df = results_df 
 
-        metric_names = st.session_state.metric_names
-        score_cols = st.session_state.score_cols
+        # Her çalıştığında metrik isimlerini ve görüntülenecek sütunları al
+        metric_names = [col.replace('_', ' ').title() for col in results_df.columns if isinstance(results_df[col].iloc[0], dict) and 'score' in results_df[col].iloc[0]]
+        display_score_cols = [f'{name} Score' for name in metric_names if 'Violation' not in name and 'Boundary' not in name]
+        st.session_state.metric_names = metric_names
+        st.session_state.display_score_cols = display_score_cols
 
         st.subheader("Filtreleme ve Sıralama")
         filter_cols = st.columns([2, 2, 3, 3])
@@ -420,7 +427,7 @@ elif page == "Toplu Değerlendirme":
         sort_by = filter_cols[1].selectbox("Sırala", ["Overall Score"] + sorted(metric_names))
         sort_ascending = filter_cols[1].toggle("Artan", False)
         sort_key = f"{sort_by} Score" if sort_by != "Overall Score" else sort_by
-        results_df = results_df.sort_values(by=sort_key, ascending=sort_ascending)
+        results_df = results_df.sort_values(by=sort_key, ascending=sort_ascending) # type: ignore
 
         score_filter_metric = filter_cols[2].selectbox("Skor Filtre Metriği", ["Overall Score"] + sorted(metric_names))
         score_key = f"{score_filter_metric} Score" if score_filter_metric != "Overall Score" else score_filter_metric
@@ -440,24 +447,27 @@ elif page == "Toplu Değerlendirme":
 
         if not results_df.empty:
             st.subheader("Genel Metrikler (Filtrelenmiş)")
-            score_df = results_df[score_cols]
-            avg_cols = st.columns(len(score_cols))
-            for i, col_name in enumerate(score_cols):
+            score_df = results_df[display_score_cols]
+            avg_cols = st.columns(len(display_score_cols))
+            for i, col_name in enumerate(display_score_cols):
                 with avg_cols[i]:
                     st.metric(label=f"Ort. {col_name.replace(' Score', '')}", value=f"{score_df[col_name].mean():.2f}")
             
-            # AI Analizi
-            with st.expander("🤖 AI Analizi ve Öneriler"):
-                if st.button("Analiz Oluştur", key="generate_analysis"):
+            # AI Analizi ve Trend
+            st.markdown("---")
+            
+            analysis_tabs = st.tabs(["🤖 Genel Performans Analizi", "📈 Duygu Trendi Analizi", "📊 Grafikler"])
+
+            with analysis_tabs[0]:
+                if st.button("Genel Analiz Oluştur", key="generate_analysis", use_container_width=True):
                     if evaluator:
                         with st.spinner("AI Analisti sonuçları inceliyor..."):
-                            stats_df = results_df[score_cols]
-                            stats = stats_df.agg(['mean', 'std', 'min', 'max']).to_dict()
+                            stats_df = results_df[display_score_cols]
+                            stats = stats_df.agg(['mean', 'std', 'min', 'max']).to_dict() # type: ignore
                             stats['total_conversations'] = len(results_df)
                             
-                            # `n` ve `columns` parametrelerini doğru kullan
-                            low_df = results_df.nsmallest(n=3, columns='Overall Score')
-                            high_df = results_df.nlargest(n=3, columns='Overall Score')
+                            low_df = results_df.sort_values(by='Overall Score', ascending=True).head(3) # type: ignore
+                            high_df = results_df.sort_values(by='Overall Score', ascending=False).head(3) # type: ignore
 
                             def format_examples(df, title):
                                 formatted_str = f"--- {title} ---\n"
@@ -479,6 +489,49 @@ elif page == "Toplu Değerlendirme":
 
                 if 'ai_analysis' in st.session_state:
                     st.markdown(st.session_state.ai_analysis)
+
+            with analysis_tabs[1]:
+                if st.button("Duygu Trendini Analiz Et", key="generate_sentiment_trend", use_container_width=True):
+                    if evaluator:
+                        with st.spinner("Duygu trendleri analiz ediliyor..."):
+                            sentiment_col = "User Sentiment Score"
+                            if sentiment_col in results_df.columns:
+                                trend_df = results_df[['chat_id', sentiment_col]].copy()
+                                trend_df.dropna(subset=[sentiment_col], inplace=True) # type: ignore
+                                
+                                # Linter hatasını düzelt: DataFrame üzerinde agg çağır
+                                trend_stats_df = trend_df[[sentiment_col]]
+                                stats_sentiment = trend_stats_df.agg(['mean', 'std', 'min', 'max']).to_dict() # type: ignore
+                                
+                                trend_data_list = list(trend_df.itertuples(index=False, name=None)) # type: ignore
+
+                                trend_analysis = asyncio.run(evaluator.analyze_sentiment_trend(
+                                    stats_json=json.dumps(stats_sentiment, indent=2),
+                                    sentiment_trend_data_str=str(trend_data_list)
+                                ))
+                                st.session_state.sentiment_trend_analysis = trend_analysis
+                            else:
+                                st.error(f"Sonuçlarda '{sentiment_col}' sütunu bulunamadı.")
+                    else:
+                        st.warning("Analiz oluşturmak için Değerlendirici servisi (Evaluator) başlatılamadı.")
+                
+                if 'sentiment_trend_analysis' in st.session_state:
+                    st.markdown(st.session_state.sentiment_trend_analysis)
+
+            with analysis_tabs[2]:
+                st.subheader("Metrik Ortalamaları")
+                avg_scores = score_df.mean().reset_index() # type: ignore
+                avg_scores.columns = ['Metrik', 'Ortalama Puan']
+                avg_scores['Metrik'] = avg_scores['Metrik'].str.replace(' Score', '')
+                st.bar_chart(avg_scores.set_index('Metrik'))
+
+                st.subheader("Genel Skor Dağılımı (Overall Score)")
+                overall_scores = results_df['Overall Score'].dropna() # type: ignore
+                
+                # Streamlit'te histogram oluşturma
+                hist_values, hist_bins = np.histogram(overall_scores, bins=20, range=(0,1))
+                hist_df = pd.DataFrame(hist_values, index=hist_bins[:-1], columns=["Sayı"]) # type: ignore
+                st.bar_chart(hist_df)
 
             st.markdown("---")
             st.subheader(f"Değerlendirme Sonuçları ({len(results_df)} adet)")
@@ -584,7 +637,24 @@ elif page == "Oturum Analizi":
                             if result_data.get("error"):
                                 st.error(f"Değerlendirme hatası: {result_data.get('error')}")
                             else:
+                                # Önceki değerlendirme sonuçlarını göster
                                 display_session_results(result_data)
+
+                                # Şimdi de duygu trendi grafiğini ekle
+                                sentiment_trend_data = result_data.get("sentiment_trend")
+                                if sentiment_trend_data:
+                                    st.subheader("Oturum İçi Duygu Değişimi")
+                                    try:
+                                        trend_df = pd.DataFrame(sentiment_trend_data)
+                                        if not trend_df.empty:
+                                            trend_df = trend_df.set_index('turn')
+                                            st.line_chart(trend_df['sentiment_score'])
+                                        else:
+                                            st.info("Duygu trendi verisi boş.")
+                                    except Exception as e:
+                                        st.error(f"Duygu trendi grafiği oluşturulurken bir hata oluştu: {e}")
+                                else:
+                                    st.warning("Oturum içi duygu trendi verisi bulunamadı.")
                         else:
                             st.error("Görevden bir sonuç alınamadı.")
 
