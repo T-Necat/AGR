@@ -446,7 +446,7 @@ elif page == "Toplu Değerlendirme":
             if valid_scores.empty: # type: ignore
                 filter_cols[3].warning(f"'{score_filter_metric}' için filtrelenecek skor bulunamadı.")
             else:
-                min_val, max_val = float(valid_scores.min()), float(valid_scores.max())
+                min_val, max_val = np.min(valid_scores), np.max(valid_scores) # type: ignore
                 
                 # Eğer min ve max değerleri aynıysa slider'ı devre dışı bırak
                 if min_val == max_val:
@@ -471,7 +471,8 @@ elif page == "Toplu Değerlendirme":
                 avg_cols = st.columns(len(display_score_cols))
                 for i, col_name in enumerate(display_score_cols):
                     with avg_cols[i]:
-                        mean_val = pd.to_numeric(score_df[col_name], errors='coerce').mean()
+                        numeric_series = pd.to_numeric(score_df[col_name], errors='coerce')
+                        mean_val = numeric_series.mean() # type: ignore
                         st.metric(label=f"Ort. {col_name.replace(' Score', '')}", value=f"{mean_val:.2f}")
             else:
                 st.info("Ortalama skorları göstermek için yeterli metrik verisi bulunamadı.")

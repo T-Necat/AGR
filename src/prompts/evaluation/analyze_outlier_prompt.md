@@ -9,10 +9,10 @@ Sen uzman bir AI performans analistisin. Görevin, bir AI Agent'ın yanıtının
 Analizini, aşağıdaki `OutlierAnalysis` Pydantic modeline uygun bir JSON nesnesi olarak döndürmelisin:
 
 ```json
-{
+{{
   "metric_name": "{metric_name}",
   "explanation": "Buraya kök neden analizin gelecek."
-}
+}}
 ```
 
 ## DEĞERLENDİRME BAĞLAMI

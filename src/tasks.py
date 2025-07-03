@@ -47,12 +47,13 @@ async def _run_single_evaluation(eval_data: dict, current_evaluator: AgentEvalua
             agent_persona=agent_persona,
             tool_calls=None,
             enable_outlier_analysis=True,  # Aykırı değer analizini aç
-            outlier_threshold=0.6,
-            enable_g_eval=True # G-EVAL denetimini de aç
+            outlier_threshold=0.6
         )
         if eval_result:
-            # Pydantic modelini tekrar dict'e çevirerek JSON uyumluluğunu sağla
-            return eval_result.model_dump()
+            # Pydantic modelini dict'e çevir ve orijinal veriyle birleştir
+            evaluation_dict = eval_result.model_dump()
+            eval_data.update(evaluation_dict)
+            return eval_data
         return None
     except Exception as e:
         logger.error(f"Tekil değerlendirme hatası (Chat ID: {eval_data.get('chat_id', 'N/A')}): {e}", exc_info=True)
