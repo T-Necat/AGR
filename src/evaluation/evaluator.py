@@ -53,6 +53,12 @@ class SentimentTurn(BaseModel):
     sentiment_score: float = Field(..., description="Kullanıcının bu dönüşteki duygu puanı (-1.0 ile 1.0 arasında).")
     reasoning: str = Field(..., description="Bu puanın neden verildiğini açıklayan kısa ve net bir gerekçe.")
 
+class GEvalResult(BaseModel):
+    """G-EVAL denetim sonucunu içeren model."""
+    is_consistent: bool = Field(..., description="Orijinal puan ve gerekçenin tutarlı olup olmadığını belirtir.")
+    re_evaluation_reasoning: str = Field(..., description="Tutarlılık kararının arkasındaki mantığı açıklar.")
+    corrected_score: Optional[float] = Field(default=None, description="Tutarsızlık durumunda önerilen düzeltilmiş puan.")
+
 
 class AgentEvaluator:
     """
@@ -128,11 +134,12 @@ class AgentEvaluator:
         agent_persona: str,
         tool_calls: Optional[List[dict]] = None,
         enable_outlier_analysis: bool = False,
-        outlier_threshold: float = 0.5
+        outlier_threshold: float = 0.5,
+        enable_g_eval: bool = False
     ) -> Optional[EvaluationResult]:
         """
         Bir konuşma turunu, dinamik olarak birleştirilmiş prompt'ları kullanarak değerlendirir.
-        Gerekirse aykırı değer analizi yapar.
+        Gerekirse aykırı değer analizi ve G-EVAL tutarlılık denetimi yapar.
         """
         tool_calls_str = str(tool_calls) if tool_calls else "Not used"
         logger.info(f"Tekli konuşma değerlendirmesi başlatıldı. Sorgu: '{user_query[:50]}...'")
@@ -157,6 +164,46 @@ class AgentEvaluator:
                 ],
             )
             logger.info("Tekli konuşma değerlendirmesi başarıyla tamamlandı.")
+
+            # G-EVAL: Değerlendirme tutarlılığını denetle ve gerekirse düzelt
+            if enable_g_eval and evaluation_metrics:
+                logger.info("G-EVAL tutarlılık denetimi başlatılıyor...")
+                g_eval_tasks = []
+                # `evaluation_metrics` bir Pydantic model olduğu için, üzerinde döngü kurmak için field'larını kullanırız
+                for metric_name, metric_value in evaluation_metrics:
+                    if metric_value and isinstance(metric_value, MetricEvaluation):
+                        task = self._g_eval_metric_consistency(
+                            metric_name=metric_name,
+                            original_score=metric_value.score,
+                            original_reasoning=metric_value.reasoning,
+                            user_query=user_query,
+                            agent_response=agent_response
+                        )
+                        g_eval_tasks.append((metric_name, task))
+
+                if g_eval_tasks:
+                    # Task'leri paralel olarak çalıştır
+                    g_eval_results_list = await asyncio.gather(*[task for _, task in g_eval_tasks])
+                    
+                    # Sonuçları işle
+                    for (metric_name, _), g_eval_result in zip(g_eval_tasks, g_eval_results_list):
+                        if g_eval_result and not g_eval_result.is_consistent and g_eval_result.corrected_score is not None:
+                            # İlgili metrik nesnesini güncelle
+                            metric_to_update = getattr(evaluation_metrics, metric_name)
+                            if metric_to_update:
+                                logger.warning(
+                                    f"G-EVAL tutarsızlık buldu: '{metric_name}'. "
+                                    f"Orijinal Skor: {metric_to_update.score}, Yeni Skor: {g_eval_result.corrected_score}."
+                                )
+                                metric_to_update.score = g_eval_result.corrected_score
+                                # Gerekçeyi, denetim kaydını içerecek şekilde güncelle
+                                metric_to_update.reasoning = (
+                                    f"[G-EVAL DENETİMİ]: {g_eval_result.re_evaluation_reasoning}\\n"
+                                    f"---------------------\\n"
+                                    f"[ORİJİNAL GEREKÇE]: {metric_to_update.reasoning}"
+                                )
+                logger.info("G-EVAL tutarlılık denetimi tamamlandı.")
+
 
             result = EvaluationResult(metrics=evaluation_metrics)
 
@@ -251,6 +298,40 @@ class AgentEvaluator:
             return analysis_response
         except Exception as e:
             logger.error(f"'{metric_name}' metriği için aykırı değer analizi sırasında hata: {e}", exc_info=True)
+            return None
+
+    async def _g_eval_metric_consistency(
+        self,
+        metric_name: str,
+        original_score: float,
+        original_reasoning: str,
+        user_query: str,
+        agent_response: str
+    ) -> Optional[GEvalResult]:
+        """Tek bir metriğin değerlendirme tutarlılığını G-EVAL ile denetler."""
+        logger.debug(f"'{metric_name}' için G-EVAL tutarlılık denetimi yapılıyor.")
+        prompt_template = self._load_prompt_template(self.base_prompt_path / "evaluation" / "g_eval_prompt.md")
+        
+        prompt = prompt_template.format(
+            user_query=user_query,
+            agent_response=agent_response,
+            metric_name=metric_name,
+            original_score=original_score,
+            original_reasoning=original_reasoning
+        )
+        
+        try:
+            g_eval_response = await self.async_client.chat.completions.create( # type: ignore
+                model=self.model,
+                response_model=GEvalResult,
+                messages=[
+                    {"role": "system", "content": "You are a meticulous AI Evaluation Auditor. Your task is to check the consistency of an evaluation made by another AI. Your output must be a valid JSON object."},
+                    {"role": "user", "content": prompt}
+                ],
+            )
+            return g_eval_response
+        except Exception as e:
+            logger.error(f"'{metric_name}' metriği için G-EVAL denetimi sırasında hata: {e}", exc_info=True)
             return None
 
     async def evaluate_session(

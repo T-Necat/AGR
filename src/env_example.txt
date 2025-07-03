@@ -2,6 +2,7 @@
 # Bu dosya, .gitignore tarafından GİZLENMEZ, bu nedenle buraya ASLA gerçek anahtar girmeyin.
 OPENAI_API_KEY="YOUR_API_KEY_HERE"
 LANGCHAIN_API_KEY="YOUR_API_KEY_HERE"
+API_KEY="JotformSecretKey-123" # Uygulama içi güvenlik için anahtar
 
 # Embedding Model
 EMBEDDING_MODEL=text-embedding-3-small

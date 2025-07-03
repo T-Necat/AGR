@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     
     # Opsiyonel Ayarlar (varsayılan değerli)
     LANGCHAIN_API_KEY: Optional[str] = None
+    DATABASE_URL: str = "sqlite:///./evaluation_metrics.db"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     LLM_MODEL: str = "gpt-4o-mini-2024-07-18"
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

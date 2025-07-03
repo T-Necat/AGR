@@ -6,7 +6,7 @@ Bu proje, yapay zeka ajanlarının performansını ölçmek, analiz etmek ve kul
 
 ## ✨ Ana Özellikler
 
-- **Çok Boyutlu Değerlendirme:** Agent konuşmalarını; hedefe uygunluk, doğruluk, üslup, güvenlik ve **kullanıcı duygu durumu** gibi çok boyutlu kriterlere göre `LLM-as-a-Judge` yaklaşımıyla değerlendirir.
+- **Güvenilir ve Çok Boyutlu Değerlendirme:** Agent konuşmalarını; hedefe uygunluk, doğruluk, üslup ve güvenlik gibi çok boyutlu kriterlere göre `LLM-as-a-Judge` yaklaşımıyla değerlendirir. **G-EVAL denetimi** ile skorların gerekçeleriyle tutarlılığı doğrulanır, bu da sonuçları daha güvenilir ve objektif kılar.
 - **Gelişmiş Veri Görselleştirme:**
     - **Toplu Değerlendirme:** Metrik ortalamaları ve skor dağılımlarını gösteren **interaktif grafikler**.
     - **Oturum Analizi:** Konuşma boyunca kullanıcı duygu durumunun değişimini gösteren **trend grafikleri**.

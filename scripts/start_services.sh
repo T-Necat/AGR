@@ -1,5 +1,6 @@
 #!/bin/bash
-# Bu script, AI Agent Değerlendirme & Tavsiye Sistemi için gerekli tüm servisleri başlatır.
+# Bu script, AI Agent Değerlendirme Sistemi için gerekli tüm servisleri başlatır.
+# Hem backend (FastAPI, Celery) hem de frontend (Vite) sunucularını başlatır.
 # Tüm loglar bu terminalde gösterilecektir.
 # Çıkmak ve tüm servisleri durdurmak için Ctrl+C tuşuna basın.
 
@@ -21,7 +22,7 @@ fi
 cleanup() {
     echo ""
     echo ">>> Servisler kapatılıyor... Lütfen bekleyin."
-    # Bu script tarafından başlatılan tüm alt işlemleri (Celery, Streamlit vb.) sonlandırır.
+    # Bu script tarafından başlatılan tüm alt işlemleri (Celery, Vite vb.) sonlandırır.
     kill 0
     exit
 }
@@ -34,14 +35,12 @@ echo "[1/3] Celery worker başlatılıyor..."
 celery -A src.celery_app worker --loglevel=INFO &
 
 # 2. FastAPI API'sini Başlat
-echo "[2/3] FastAPI tavsiye API'si http://localhost:8000 adresinde başlatılıyor..."
-python src/api/main.py &
+echo "[2/3] FastAPI API'si http://localhost:8000 adresinde başlatılıyor..."
+python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload &
 
-# 3. Streamlit Uygulamasını Başlat
-echo "[3/3] Streamlit değerlendirme paneli http://localhost:8501 adresinde başlatılıyor..."
-# Sunucu başlıklarını gizleyerek logları daha temiz tut
-streamlit run src/evaluation_app.py --server.headless true &
-
+# 3. Frontend Geliştirme Sunucusunu Başlat
+echo "[3/3] Frontend geliştirme sunucusu http://localhost:5173 adresinde başlatılıyor..."
+(cd frontend && npm run dev) &
 
 # Tüm arka plan işlemleri bitene kadar bekle (Ctrl+C ile kesilene kadar)
 wait 
