@@ -113,12 +113,19 @@ class AgentEvaluator:
         user_sentiment_prompt_path = agent_metrics_dir / "user_sentiment.md"
         user_criteria_section = self._load_prompt_template(user_sentiment_prompt_path)
         
-        # Ana şablonu ve metrikler bölümünü formatla
-        final_prompt = main_template.format(
-            agent_criteria_section=agent_criteria_section.format(**kwargs),
-            user_criteria_section=user_criteria_section.format(**kwargs),
+        # 1. Adım: Ana şablonu, metrik bölümleriyle birleştir.
+        # Bu aşamada formatlama yapılmaz, sadece metin eklenir.
+        
+        # KEYERROR DÜZELTMESİ: İki adımlı formatlama yerine, tüm argümanları
+        # birleştirip tek seferde formatlayarak hatayı önle.
+        format_args = {
+            "agent_criteria_section": agent_criteria_section,
+            "user_criteria_section": user_criteria_section,
             **kwargs
-        )
+        }
+
+        # 2. Adım: Birleştirilmiş ve tamamlanmış şablonu, gelen tüm argümanlarla tek seferde formatla.
+        final_prompt = main_template.format(**format_args)
         
         return final_prompt
 
@@ -264,14 +271,13 @@ class AgentEvaluator:
         )
         
         try:
-            analysis_response = await self.async_client.chat.completions.create(
+            analysis_response = await self.async_client.chat.completions.create( # type: ignore
                 model=self.model,
                 response_model=OutlierAnalysis,
                 messages=[
                     {"role": "system", "content": "You are an expert AI performance analyst. Your task is to find the root cause of a low score. Your output must be a valid JSON object."},
                     {"role": "user", "content": prompt}
                 ],
-                max_retries=1,
             )
             return analysis_response
         except Exception as e:

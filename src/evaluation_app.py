@@ -132,31 +132,9 @@ def load_and_merge_raw_data(data_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # --- Değerlendirme Fonksiyonu ---
-async def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]:
-    """Tek bir konuşma verisi için değerlendirmeyi çalıştırır."""
-    try:
-        user_query = str(eval_data['user_query'])
-        agent_response = str(eval_data['agent_response'])
-        agent_persona = str(eval_data['persona'])
-        
-        try:
-            tasks_str = str(eval_data.get('tasks', '[]'))
-            tasks = json.loads(tasks_str.replace("'", "\""))
-            task_descriptions = [t.get('value', {}).get('about', '') for t in tasks if t.get('type') == 'talk-about']
-            agent_goal = ". ".join(filter(None, task_descriptions)) or "Kullanıcıya yardımcı olmak."
-        except (json.JSONDecodeError, TypeError):
-            agent_goal = "Kullanıcıya yardımcı olmak."
-        
-        rag_context = f"Agent'ın bilgi tabanından getirdiği varsayılan kanıt: '{agent_response}'"
-
-        return await _evaluator.evaluate_conversation(
-            user_query=user_query, agent_response=agent_response,
-            agent_goal=agent_goal, rag_context=rag_context,
-            agent_persona=agent_persona, tool_calls=None
-        )
-    except Exception as e:
-        st.error(f"Değerlendirme hatası: {e}")
-        return None
+# BU FONKSİYON src/tasks.py İÇERİSİNDEKİ _run_single_evaluation İLE YENİDEN YAZILDIĞI
+# VE ARTIK KULLANILMADIĞI İÇİN KALDIRILDI.
+# async def run_evaluation(eval_data: pd.Series, _evaluator: AgentEvaluator) -> Optional[EvaluationMetrics]: ...
 
 def display_evaluation_results(evaluation_result: Optional[EvaluationMetrics]):
     """Değerlendirme sonuçlarını görselleştirir."""
@@ -311,7 +289,11 @@ if page == "Sandbox":
 
     # Sandbox formu gönderildikten sonra sonucu göster
     if 'eval_result' in st.session_state:
-        display_evaluation_results(st.session_state.eval_result)
+        eval_res = st.session_state.eval_result
+        # HATA DÜZELTMESİ: display_evaluation_results fonksiyonu EvaluationMetrics bekliyor,
+        # ancak eval_res bir EvaluationResult nesnesi. Bu yüzden .metrics'e erişiyoruz.
+        # Ayrıca eval_res'in None olup olmadığını kontrol ediyoruz.
+        display_evaluation_results(eval_res.metrics if eval_res else None)
 
 # --- Sayfa 2: Toplu Değerlendirme ---
 elif page == "Toplu Değerlendirme":
@@ -401,15 +383,15 @@ elif page == "Toplu Değerlendirme":
 
             if not results_df.empty:
                 # İlk geçerli satırdan metrik isimlerini al
-                first_metrics_dict = results_df['metrics'].iloc[0]
+                first_metrics_dict = results_df['metrics'].iloc[0] # type: ignore
                 metric_keys = list(first_metrics_dict.keys())
                 
                 for key in metric_keys:
                     metric_name = key.replace('_', ' ').title()
-                    results_df[f'{metric_name} Score'] = results_df['metrics'].apply(
+                    results_df[f'{metric_name} Score'] = results_df['metrics'].apply( # type: ignore
                         lambda d: d.get(key, {}).get('score') if isinstance(d, dict) and d.get(key) else None
                     )
-                    results_df[f'{metric_name} Reasoning'] = results_df['metrics'].apply(
+                    results_df[f'{metric_name} Reasoning'] = results_df['metrics'].apply( # type: ignore
                         lambda d: d.get(key, {}).get('reasoning') if isinstance(d, dict) and d.get(key) else None
                     )
 
@@ -440,7 +422,7 @@ elif page == "Toplu Değerlendirme":
         filter_cols = st.columns([2, 2, 3, 3])
         
         # Filtreleri uygula
-        agent_ids = ['Tümü'] + sorted(list(results_df['agent_id'].unique()))
+        agent_ids = ['Tümü'] + sorted(list(results_df['agent_id'].unique())) # type: ignore
         selected_agent = filter_cols[0].selectbox("Agent ID'ye Göre Filtrele", agent_ids)
         if selected_agent != 'Tümü':
             results_df = results_df[results_df['agent_id'] == selected_agent]
@@ -459,9 +441,9 @@ elif page == "Toplu Değerlendirme":
             score_series = pd.to_numeric(results_df[score_key], errors='coerce')
             
             # NaN olmayan değerleri filtrele
-            valid_scores = score_series.dropna()
+            valid_scores = score_series.dropna() # type: ignore
             
-            if valid_scores.empty:
+            if valid_scores.empty: # type: ignore
                 filter_cols[3].warning(f"'{score_filter_metric}' için filtrelenecek skor bulunamadı.")
             else:
                 min_val, max_val = float(valid_scores.min()), float(valid_scores.max())
@@ -477,7 +459,7 @@ elif page == "Toplu Değerlendirme":
                         value=(min_val, max_val)
                     )
                     # Orijinal DataFrame'i (NaN içeren) score_series kullanarak filtrele
-                    results_df = results_df[score_series.between(score_range[0], score_range[1])]
+                    results_df = results_df[score_series.between(score_range[0], score_range[1])] # type: ignore
         
         st.markdown("---")
 
