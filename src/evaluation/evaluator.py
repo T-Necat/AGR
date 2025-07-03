@@ -23,7 +23,7 @@ class MetricEvaluation(BaseModel):
 
 class EvaluationMetrics(BaseModel):
     """
-    Bu model, bir agent yanıtının ve ilgili kullanıcı sorgusunun belirtilen kriterlere göre
+    Bu model, bir agent yanıtının ve ilgili kullanıcı sorgusunun belirtilen kriterlere göre 
     değerlendirme sonuçlarını içerir.
     """
     goal_adherence: Optional[MetricEvaluation] = Field(default=None, description="Agent'ın ana görevine sadakati.")
@@ -42,20 +42,10 @@ class OutlierAnalysis(BaseModel):
     metric_name: str = Field(..., description="Analiz edilen metriğin adı.")
     explanation: str = Field(..., description="Bu düşük skorun kök nedenini açıklayan, yapay zeka tarafından üretilmiş detaylı analiz.")
 
-class GEvalResult(BaseModel):
-    """
-    Bir metrik değerlendirmesinin tutarlılığını ve güvenilirliğini G-EVAL metoduyla
-    denetleyen model.
-    """
-    is_consistent: bool = Field(..., description="Verilen puan ile gerekçenin birbiriyle tutarlı olup olmadığını belirtir (True/False).")
-    re_evaluation_reasoning: str = Field(..., description="Tutarlılık kontrolünün arkasındaki mantığı ve gerekçeyi açıklar. Eğer tutarsızlık varsa, nedenini belirtir.")
-    corrected_score: Optional[float] = Field(default=None, description="Eğer orijinal skor tutarsızsa, olması gereken düzeltilmiş puan.")
-
 class EvaluationResult(BaseModel):
     """Tek bir değerlendirmenin tüm sonuçlarını kapsayan model."""
     metrics: EvaluationMetrics
     outlier_analyses: Optional[List[OutlierAnalysis]] = Field(default=None, description="Tespit edilen aykırı değerler için üretilen analizler.")
-    g_eval_results: Optional[Dict[str, GEvalResult]] = Field(default=None, description="Her bir metrik için G-EVAL tutarlılık denetimi sonuçları.")
 
 class SentimentTurn(BaseModel):
     """Her bir kullanıcı dönüşü için duygu durumunu içeren model."""
@@ -138,12 +128,11 @@ class AgentEvaluator:
         agent_persona: str,
         tool_calls: Optional[List[dict]] = None,
         enable_outlier_analysis: bool = False,
-        outlier_threshold: float = 0.5,
-        enable_g_eval: bool = False
+        outlier_threshold: float = 0.5
     ) -> Optional[EvaluationResult]:
         """
         Bir konuşma turunu, dinamik olarak birleştirilmiş prompt'ları kullanarak değerlendirir.
-        Gerekirse aykırı değer analizi ve G-EVAL tutarlılık denetimi yapar.
+        Gerekirse aykırı değer analizi yapar.
         """
         tool_calls_str = str(tool_calls) if tool_calls else "Not used"
         logger.info(f"Tekli konuşma değerlendirmesi başlatıldı. Sorgu: '{user_query[:50]}...'")
@@ -176,33 +165,13 @@ class AgentEvaluator:
                     evaluation_results=evaluation_metrics,
                     user_query=user_query,
                     agent_response=agent_response,
-                    rag_context=rag_context,
+                    rag_context=rag_context, # Varsayılan olarak tüm context'i kullan
                     agent_goal=agent_goal,
                     agent_persona=agent_persona,
                     outlier_threshold=outlier_threshold
                 )
                 result.outlier_analyses = outliers
             
-            if enable_g_eval and evaluation_metrics:
-                g_eval_tasks = []
-                for metric_name, metric_value in evaluation_metrics:
-                    if metric_value and isinstance(metric_value, MetricEvaluation):
-                        task = self.g_eval_metric_consistency(
-                            user_query=user_query,
-                            agent_response=agent_response,
-                            metric_name=metric_name,
-                            original_evaluation=metric_value
-                        )
-                        g_eval_tasks.append((metric_name, task))
-                
-                if g_eval_tasks:
-                    g_eval_results_list = await asyncio.gather(*[task for _, task in g_eval_tasks])
-                    result.g_eval_results = {
-                        metric_name: res 
-                        for (metric_name, _), res in zip(g_eval_tasks, g_eval_results_list) 
-                        if res is not None
-                    }
-
             return result
             
         except Exception as e:
@@ -450,42 +419,6 @@ class AgentEvaluator:
 
         logger.info(f"{len(processed_results)} adet kullanıcı dönüşü için duygu analizi tamamlandı.")
         return processed_results
-
-    async def g_eval_metric_consistency(
-        self,
-        user_query: str,
-        agent_response: str,
-        metric_name: str,
-        original_evaluation: MetricEvaluation
-    ) -> Optional[GEvalResult]:
-        """
-        Verilen bir metrik değerlendirmesinin tutarlılığını G-EVAL prompt'u kullanarak
-        ikincil bir yapay zeka değerlendirmesiyle denetler.
-        """
-        logger.debug(f"'{metric_name}' metriği için G-EVAL tutarlılık denetimi başlatıldı.")
-        prompt_template = self._load_prompt_template(self.base_prompt_path / "evaluation" / "g_eval_prompt.md")
-        prompt = prompt_template.format(
-            user_query=user_query,
-            agent_response=agent_response,
-            metric_name=metric_name,
-            original_score=original_evaluation.score,
-            original_reasoning=original_evaluation.reasoning
-        )
-        
-        try:
-            geval_response = await self.async_client.chat.completions.create(
-                model=self.model, # Aynı veya daha güçlü bir model kullanılabilir
-                response_model=GEvalResult,
-                messages=[
-                    {"role": "system", "content": "You are a meticulous AI evaluation auditor. Your task is to check the consistency of a given evaluation. Your output must be a valid JSON object."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_retries=1,
-            )
-            return geval_response
-        except Exception as e:
-            logger.error(f"'{metric_name}' için G-EVAL denetimi sırasında hata: {e}", exc_info=True)
-            return None
 
 
 # Örnek kullanım (test için)
