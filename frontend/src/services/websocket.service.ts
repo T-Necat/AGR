@@ -10,8 +10,14 @@ class WebSocketService {
             return this.socket;
         }
 
+        const wsPath = `/ws/evaluation/${clientId}`;
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${wsProtocol}//${window.location.host}/ws/evaluation/${clientId}`;
+        
+        // Development'ta Vite proxy'si üzerinden, production'da ise doğrudan bağlan
+        const url = import.meta.env.DEV
+            ? `${wsProtocol}//${window.location.host}${wsPath}` // Vite dev server handles proxy
+            : `${wsProtocol}//${window.location.host}${wsPath}`; // Production server
+
         this.socket = new WebSocket(url);
 
         this.socket.onopen = () => {
